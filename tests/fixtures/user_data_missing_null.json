@@ -1,0 +1,31 @@
+{
+  "id": 42,
+  "email": "person@example.invalid",
+  "devices": [
+    {
+      "serialNumber": "NULLS-001",
+      "name": null,
+      "type": null,
+      "siteId": null,
+      "group": null,
+      "fireHazardStatus": null
+    },
+    {
+      "serialNumber": "MISSING-002"
+    },
+    {
+      "serialNumber": "   ",
+      "name": "must be skipped",
+      "fireHazardStatus": {"message": "sensitive diagnostic marker"}
+    },
+    {
+      "name": "also skipped"
+    },
+    "not-an-object"
+  ],
+  "sites": [
+    {"id": 300, "userId": 42, "displayName": null},
+    {"id": null, "displayName": "must be skipped"},
+    "not-an-object"
+  ]
+}
