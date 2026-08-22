@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
@@ -81,6 +82,29 @@ def test_parser_does_not_retain_raw_response() -> None:
 
     assert not hasattr(device, "raw_data")
     assert source["devices"][0] not in vars(device).values()
+
+
+def test_device_connectivity_observation_is_validated() -> None:
+    """Explicit REST connectivity and timestamps parse without coercion."""
+    online = parsers.parse_device(
+        {
+            "serialNumber": "ONLINE-001",
+            "isOnline": True,
+            "lastSeenUtc": "2026-08-22T10:00:00-07:00",
+        }
+    )
+    malformed = parsers.parse_device(
+        {
+            "serialNumber": "UNKNOWN-002",
+            "isOnline": "yes",
+            "lastSeenUtc": "not-a-timestamp",
+        }
+    )
+
+    assert online.is_online is True
+    assert online.last_device_observation_utc == datetime(2026, 8, 22, 17, tzinfo=UTC)
+    assert malformed.is_online is None
+    assert malformed.last_device_observation_utc is None
 
 
 def test_malformed_top_level_collections_are_empty() -> None:

@@ -84,6 +84,11 @@ def boolean(value: Any) -> bool:
     return value if isinstance(value, bool) else False
 
 
+def optional_boolean(value: Any) -> bool | None:
+    """Return an explicit API boolean or None."""
+    return value if isinstance(value, bool) else None
+
+
 def bounded_scalar_mapping(
     value: Any,
 ) -> dict[str, str | int | float | bool] | None:
@@ -373,6 +378,12 @@ def parse_device(data: dict[str, Any], serial_number: str | None = None) -> Devi
         is_hvac_verified=boolean(data.get("isHvacVerified")),
         has_frozen_pipe=boolean(data.get("hasFrozenPipe")),
         is_owner=boolean(data.get("isOwner")),
+        is_online=optional_boolean(data.get("isOnline")),
+        last_device_observation_utc=parse_datetime(
+            first_optional_string(
+                data, "lastSeenUtc", "lastObservedUtc", "lastUpdatedUtc"
+            )
+        ),
         fire_hazard_status=fire_hazard_status,
         group_name=optional_string(group_data.get("name")),
         group_id=optional_integer(group_data.get("id")),

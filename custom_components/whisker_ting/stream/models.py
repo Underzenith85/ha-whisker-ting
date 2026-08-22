@@ -58,3 +58,13 @@ class StationState:
     def available(self) -> bool:
         """Return whether real-time readings for the station are current."""
         return self.connected and self.subscribed and self.live
+
+
+@dataclass(frozen=True)
+class StationDiagnostics:
+    """Bounded lifecycle diagnostics for one managed station."""
+
+    last_sample_utc: datetime | None = None
+    reconnect_count: int = 0
+    last_reconnect_utc: datetime | None = None
+    last_reconnect_reason: str | None = None

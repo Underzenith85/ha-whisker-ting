@@ -55,6 +55,7 @@ from custom_components.whisker_ting.sensor import (
 from custom_components.whisker_ting.stream import (
     PowerQualityCategory,
     PowerQualityData,
+    StationDiagnostics,
     VoltageData,
 )
 
@@ -442,6 +443,83 @@ async def test_coordinator_throttles_repeated_api_failure_logs(
         await coordinator._async_update_data()
 
     assert caplog.text.count("Unable to connect to Whisker Ting API") == 1
+
+
+@pytest.mark.asyncio
+async def test_rest_failure_is_independent_from_retained_stream_diagnostics(
+    hass: HomeAssistant,
+) -> None:
+    """A failed REST refresh retains stream timestamps and marks only REST unhealthy."""
+    device = DeviceState("SERIAL-001", "Device", "FireSensor", 100)
+    sample_time = datetime(2026, 8, 22, 10, tzinfo=UTC)
+    device.last_realtime_sample_utc = sample_time
+    client = MagicMock(api_key=None, user_id=None, sites={})
+    client.get_all_device_states = AsyncMock(
+        side_effect=[
+            {device.serial_number: device},
+            WhiskerApiError("sanitized REST failure"),
+        ]
+    )
+    client.get_event_history = AsyncMock(return_value=[])
+    client.get_frozen_pipe_data = AsyncMock(return_value=FrozenPipeData())
+    manager = MagicMock()
+    manager.disconnect_all = AsyncMock()
+
+    with patch(
+        "custom_components.whisker_ting.coordinator.WhiskerWebSocketManager",
+        return_value=manager,
+    ):
+        coordinator = WhiskerDataUpdateCoordinator(hass, client, MagicMock())
+        coordinator.data = await coordinator._async_update_data()
+        successful_update = device.last_rest_update_utc
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+        await coordinator.async_shutdown()
+
+    assert device.rest_health == "error"
+    assert device.last_rest_update_utc == successful_update
+    assert device.last_realtime_sample_utc == sample_time
+
+
+@pytest.mark.asyncio
+async def test_stream_diagnostics_are_independent_and_listener_throttled(
+    hass: HomeAssistant,
+) -> None:
+    """One station's diagnostics do not change another or bypass the throttle."""
+    first = DeviceState(
+        "SERIAL-001", "First", "FireSensor", 100, station_id="STATION-A"
+    )
+    second = DeviceState(
+        "SERIAL-002", "Second", "FireSensor", 100, station_id="STATION-B"
+    )
+    coordinator = WhiskerDataUpdateCoordinator(hass, MagicMock(), MagicMock())
+    coordinator.data = {first.serial_number: first, second.serial_number: second}
+    coordinator.async_set_updated_data = MagicMock()
+    sample_time = datetime(2026, 8, 22, 10, tzinfo=UTC)
+    reconnect_time = datetime(2026, 8, 22, 10, 5, tzinfo=UTC)
+
+    coordinator._handle_stream_diagnostics_update(
+        "STATION-A",
+        StationDiagnostics(
+            last_sample_utc=sample_time,
+            reconnect_count=2,
+            last_reconnect_utc=reconnect_time,
+            last_reconnect_reason="transport closed",
+        ),
+    )
+    coordinator._handle_stream_diagnostics_update(
+        "STATION-A",
+        StationDiagnostics(last_sample_utc=sample_time, reconnect_count=3),
+    )
+
+    assert first.stream_reconnect_count == 3
+    assert first.last_realtime_sample_utc == sample_time
+    assert second.stream_reconnect_count == 0
+    assert second.last_realtime_sample_utc is None
+    assert coordinator.async_set_updated_data.call_count == 1
+    await asyncio.sleep(coordinator.STREAM_UPDATE_INTERVAL + 0.05)
+    assert coordinator.async_set_updated_data.call_count == 2
+    await coordinator.async_shutdown()
 
 
 @pytest.mark.asyncio

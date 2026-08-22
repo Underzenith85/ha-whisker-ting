@@ -20,6 +20,7 @@ from homeassistant.const import (
     UnitOfElectricPotential,
     UnitOfFrequency,
     UnitOfTemperature,
+    UnitOfTime,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -310,6 +311,69 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
         value_fn=lambda state: state.stream_health,
     ),
     WhiskerSensorEntityDescription(
+        key="rest_health",
+        translation_key="rest_health",
+        device_class=SensorDeviceClass.ENUM,
+        options=["healthy", "error"],
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda state: state.rest_health,
+    ),
+    WhiskerSensorEntityDescription(
+        key="last_rest_update",
+        translation_key="last_rest_update",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda state: state.last_rest_update_utc,
+    ),
+    WhiskerSensorEntityDescription(
+        key="last_device_observation",
+        translation_key="last_device_observation",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda state: state.last_device_observation_utc,
+    ),
+    WhiskerSensorEntityDescription(
+        key="last_realtime_sample",
+        translation_key="last_realtime_sample",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda state: state.last_realtime_sample_utc,
+    ),
+    WhiskerSensorEntityDescription(
+        key="realtime_sample_age",
+        translation_key="realtime_sample_age",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        suggested_display_precision=0,
+        value_fn=lambda state: _realtime_sample_age(state),
+    ),
+    WhiskerSensorEntityDescription(
+        key="stream_reconnect_count",
+        translation_key="stream_reconnect_count",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda state: state.stream_reconnect_count,
+    ),
+    WhiskerSensorEntityDescription(
+        key="last_stream_reconnect",
+        translation_key="last_stream_reconnect",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda state: state.last_stream_reconnect_utc,
+    ),
+    WhiskerSensorEntityDescription(
+        key="last_stream_reconnect_reason",
+        translation_key="last_stream_reconnect_reason",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda state: state.last_stream_reconnect_reason,
+    ),
+    WhiskerSensorEntityDescription(
         key="hazard_severity_level",
         translation_key="hazard_severity_level",
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -380,6 +444,17 @@ REALTIME_SENSOR_KEYS = {
     "thd_min",
     "thd_average",
     "thd_max",
+}
+
+CONNECTIVITY_DIAGNOSTIC_KEYS = {
+    "rest_health",
+    "last_rest_update",
+    "last_device_observation",
+    "last_realtime_sample",
+    "realtime_sample_age",
+    "stream_reconnect_count",
+    "last_stream_reconnect",
+    "last_stream_reconnect_reason",
 }
 
 
@@ -477,6 +552,14 @@ def _latest_voltage_condition(events: list[TingEvent]) -> str | None:
     if not matches:
         return None
     return max(matches, key=lambda item: item[0])[1]
+
+
+def _realtime_sample_age(state: DeviceState) -> float | None:
+    """Return non-negative seconds since the newest valid real-time sample."""
+    timestamp = state.last_realtime_sample_utc
+    if timestamp is None:
+        return None
+    return max((datetime.now(timestamp.tzinfo) - timestamp).total_seconds(), 0)
 
 
 def _get_hazard_status(state: DeviceState) -> str:
@@ -613,6 +696,8 @@ class WhiskerSensor(WhiskerEntity, SensorEntity):
     @property
     def available(self) -> bool:
         """Return if entity is available."""
+        if self.entity_description.key in CONNECTIVITY_DIAGNOSTIC_KEYS:
+            return self.device_state is not None
         if not super().available:
             return False
         if self.entity_description.key in REALTIME_SENSOR_KEYS:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import aiohttp
 from homeassistant.core import HomeAssistant, callback
@@ -22,6 +22,7 @@ from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
 from .stream import (
     PowerQualityCategory,
     PowerQualityData,
+    StationDiagnostics,
     StreamHealth,
     VoltageData,
     WhiskerWebSocketManager,
@@ -103,6 +104,23 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
                     break
         self._schedule_stream_listener_update()
 
+    @callback
+    def _handle_stream_diagnostics_update(
+        self, station_id: str, diagnostics: StationDiagnostics
+    ) -> None:
+        """Store bounded station diagnostics and publish through the throttle."""
+        if self.data is not None:
+            for device in self.data.values():
+                if device.station_id == station_id:
+                    device.last_realtime_sample_utc = diagnostics.last_sample_utc
+                    device.stream_reconnect_count = diagnostics.reconnect_count
+                    device.last_stream_reconnect_utc = diagnostics.last_reconnect_utc
+                    device.last_stream_reconnect_reason = (
+                        diagnostics.last_reconnect_reason
+                    )
+                    break
+        self._schedule_stream_listener_update()
+
     def is_realtime_available(self, device_id: str) -> bool:
         """Return whether a device's real-time stream is subscribed and live."""
         if self.data is None or self._ws_manager is None:
@@ -165,6 +183,7 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
                 on_power_quality_update=self._handle_power_quality_update,
                 on_availability_update=self._handle_availability_update,
                 on_health_update=self._handle_stream_health_update,
+                on_diagnostics_update=self._handle_stream_diagnostics_update,
             )
 
         if not data:
@@ -215,6 +234,12 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
         """Fetch data from the API."""
         try:
             data = await self.client.get_all_device_states()
+            observed_at = datetime.now(UTC)
+            for device in data.values():
+                device.rest_health = "healthy"
+                device.last_rest_update_utc = observed_at
+                if device.last_device_observation_utc is None:
+                    device.last_device_observation_utc = observed_at
             client_sites = getattr(self.client, "sites", None)
             self.sites = dict(client_sites) if isinstance(client_sites, dict) else {}
 
@@ -253,6 +278,19 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
                     existing = self.data.get(device_id)
                     if existing and existing.voltage.has_live_data:
                         device_state.voltage = existing.voltage
+                    if existing:
+                        device_state.last_realtime_sample_utc = (
+                            existing.last_realtime_sample_utc
+                        )
+                        device_state.stream_reconnect_count = (
+                            existing.stream_reconnect_count
+                        )
+                        device_state.last_stream_reconnect_utc = (
+                            existing.last_stream_reconnect_utc
+                        )
+                        device_state.last_stream_reconnect_reason = (
+                            existing.last_stream_reconnect_reason
+                        )
 
             if self._last_update_success is False:
                 _LOGGER.info("Connection to Whisker Ting API restored")
@@ -270,6 +308,21 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
                     await asyncio.gather(*wait_tasks)
                 for device_state in data.values():
                     if device_state.station_id:
+                        diagnostics = self._ws_manager.get_station_diagnostics(
+                            device_state.station_id
+                        )
+                        device_state.last_realtime_sample_utc = (
+                            diagnostics.last_sample_utc
+                        )
+                        device_state.stream_reconnect_count = (
+                            diagnostics.reconnect_count
+                        )
+                        device_state.last_stream_reconnect_utc = (
+                            diagnostics.last_reconnect_utc
+                        )
+                        device_state.last_stream_reconnect_reason = (
+                            diagnostics.last_reconnect_reason
+                        )
                         device_state.stream_health = self._ws_manager.get_station_state(
                             device_state.station_id
                         ).health.value
@@ -287,6 +340,7 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
             return data
         except WhiskerAuthError as err:
             self._last_update_success = False
+            self._mark_rest_unhealthy()
             raise ConfigEntryAuthFailed(
                 "Authentication failed - credentials may have changed"
             ) from err
@@ -294,6 +348,13 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
             if self._last_update_success is not False:
                 _LOGGER.warning("Unable to connect to Whisker Ting API: %s", err)
             self._last_update_success = False
+            self._mark_rest_unhealthy()
             raise UpdateFailed(
                 f"Error communicating with Whisker Ting API: {err}"
             ) from err
+
+    def _mark_rest_unhealthy(self) -> None:
+        """Retain last known device data while marking REST independently failed."""
+        if self.data:
+            for device in self.data.values():
+                device.rest_health = "error"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 
 
 @dataclass
@@ -144,6 +145,14 @@ class DeviceState:
     is_hvac_verified: bool = False
     has_frozen_pipe: bool = False
     is_owner: bool = False
+    is_online: bool | None = None
+    rest_health: str = "healthy"
+    last_rest_update_utc: datetime | None = None
+    last_device_observation_utc: datetime | None = None
+    last_realtime_sample_utc: datetime | None = None
+    stream_reconnect_count: int = 0
+    last_stream_reconnect_utc: datetime | None = None
+    last_stream_reconnect_reason: str | None = None
     stream_health: str = "stopped"
     current_temperature_c: float | None = None
     current_outage_risk: (

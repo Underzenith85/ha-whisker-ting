@@ -5,6 +5,7 @@ from .manager import WhiskerWebSocketManager
 from .models import (
     PowerQualityCategory,
     PowerQualityData,
+    StationDiagnostics,
     StationState,
     StreamHealth,
     VoltageData,
@@ -14,6 +15,7 @@ __all__ = [
     "PowerQualityCategory",
     "PowerQualityData",
     "SignalRInvocationError",
+    "StationDiagnostics",
     "StationState",
     "StreamHealth",
     "VoltageData",

@@ -114,6 +114,14 @@ registry identity, and precise coordinates and street addresses are not exposed.
 | Last fire/utility-fire event | Disabled | Newest matching fire-event timestamps |
 | Last device online/offline | Disabled | Newest matching device-connectivity timestamps |
 | Stream health | Enabled | Health of the device's live voltage stream |
+| REST API health | Enabled | REST polling health independent of the live stream |
+| Last successful REST update | Enabled | Timestamp of the last complete REST snapshot |
+| Last device observation | Disabled | Latest validated device/cloud observation timestamp |
+| Last real-time sample | Enabled | Timestamp carried by the newest valid voltage sample |
+| Real-time sample age | Disabled | Seconds since the newest valid voltage sample |
+| Stream reconnect count | Disabled | Reconnect attempts during the current integration load |
+| Last stream reconnect | Disabled | Timestamp of the latest reconnect attempt |
+| Last stream reconnect reason | Disabled | Bounded, credential-redacted disconnect reason |
 | Hazard severity level | Disabled | Ting hazard workflow severity value |
 | Device type | Enabled | Ting device type |
 | Firmware version | Disabled | Device firmware version |
@@ -145,6 +153,13 @@ Hazards are derived from explicit Ting EFH and UFH status values. A positive num
 - `stopped` — the stream was intentionally stopped
 
 Only real-time voltage, frequency, and THD entities become unavailable when the stream is no longer receiving data. REST-backed hazard and diagnostic entities remain available while REST updates continue succeeding.
+
+REST health and real-time stream health are tracked independently. Connectivity
+diagnostics retain the last successful timestamps during a failure so users can
+distinguish a cloud polling failure, a stale stream, and a device-specific outage.
+Reconnect counts are per device and reset when the integration entry is reloaded.
+Reconnect reasons are whitespace-normalized, limited to 160 characters, and redact
+credential-shaped values.
 
 ### Binary sensors
 
