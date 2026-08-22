@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 from typing import Any
 
 import aiohttp
@@ -48,6 +49,21 @@ MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "O
 
 class AuthenticationError(Exception):
     """Authentication error."""
+
+
+async def _cognito_error_code(response: aiohttp.ClientResponse) -> str | None:
+    """Return Cognito's non-sensitive error code without retaining its body."""
+    try:
+        payload = await response.json(content_type=None)
+    except (aiohttp.ClientError, ValueError):
+        return None
+    error_type = payload.get("__type") if isinstance(payload, dict) else None
+    if not isinstance(error_type, str):
+        return None
+    error_code = error_type.rsplit("#", maxsplit=1)[-1]
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9.]{0,63}", error_code):
+        return None
+    return error_code
 
 
 def hash_sha256(buf: bytes) -> str:
@@ -257,6 +273,7 @@ class WhiskerAuth:
             "access_token": tokens["AccessToken"],
             "id_token": tokens["IdToken"],
             "refresh_token": tokens["RefreshToken"],
+            "expires_in": tokens["ExpiresIn"],
             "user_attributes": user_info.get("UserAttributes", []),
         }
 
@@ -279,8 +296,9 @@ class WhiskerAuth:
             COGNITO_IDP_URL, json=payload, headers=headers
         ) as resp:
             if resp.status != 200:
-                text = await resp.text()
-                raise AuthenticationError(f"Token refresh failed: {text}")
+                error_code = await _cognito_error_code(resp)
+                suffix = f" ({error_code})" if error_code else ""
+                raise AuthenticationError(f"Token refresh failed{suffix}")
 
             result = await resp.json(content_type=None)
 
@@ -307,10 +325,11 @@ class WhiskerAuth:
             COGNITO_IDP_URL, json=payload, headers=headers
         ) as resp:
             if resp.status != 200:
-                text = await resp.text()
-                if "UserNotFoundException" in text or "NotAuthorizedException" in text:
+                error_code = await _cognito_error_code(resp)
+                if error_code in {"UserNotFoundException", "NotAuthorizedException"}:
                     raise AuthenticationError("Invalid username or password")
-                raise AuthenticationError(f"Auth initiation failed: {text}")
+                suffix = f" ({error_code})" if error_code else ""
+                raise AuthenticationError(f"Auth initiation failed{suffix}")
 
             return await resp.json(content_type=None)
 
@@ -334,11 +353,11 @@ class WhiskerAuth:
             COGNITO_IDP_URL, json=payload, headers=headers
         ) as resp:
             if resp.status != 200:
-                text = await resp.text()
-                _LOGGER.debug("Challenge response failed: %s", text)
-                if "NotAuthorizedException" in text:
+                error_code = await _cognito_error_code(resp)
+                if error_code == "NotAuthorizedException":
                     raise AuthenticationError("Invalid username or password")
-                raise AuthenticationError(f"Challenge response failed: {text}")
+                suffix = f" ({error_code})" if error_code else ""
+                raise AuthenticationError(f"Challenge response failed{suffix}")
 
             return await resp.json(content_type=None)
 
@@ -357,7 +376,8 @@ class WhiskerAuth:
             COGNITO_IDP_URL, json=payload, headers=headers
         ) as resp:
             if resp.status != 200:
-                text = await resp.text()
-                raise AuthenticationError(f"Failed to get user info: {text}")
+                error_code = await _cognito_error_code(resp)
+                suffix = f" ({error_code})" if error_code else ""
+                raise AuthenticationError(f"Failed to get user info{suffix}")
 
             return await resp.json(content_type=None)

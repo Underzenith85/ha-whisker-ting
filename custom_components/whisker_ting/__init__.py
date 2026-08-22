@@ -14,9 +14,12 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import WhiskerApiClient, WhiskerAuthError, WhiskerConnectionError
 from .const import (
+    CONF_API_KEY,
     CONF_PASSWORD,
+    CONF_REFRESH_TOKEN,
     CONF_SCAN_INTERVAL,
     CONF_USERNAME,
+    CONF_USER_ID,
     DEFAULT_SCAN_INTERVAL,
 )
 from .coordinator import WhiskerDataUpdateCoordinator
@@ -33,14 +36,28 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.SENSOR]
 
 
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate legacy entries while preserving credentials needed for one login."""
+    if entry.version < 2:
+        hass.config_entries.async_update_entry(entry, version=2, minor_version=1)
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Whisker Ting from a config entry."""
     username = entry.data[CONF_USERNAME]
-    password = entry.data[CONF_PASSWORD]
+    password = entry.data.get(CONF_PASSWORD)
     scan_interval = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
 
     session = async_get_clientsession(hass)
-    client = WhiskerApiClient(session, username, password)
+    client = WhiskerApiClient(
+        session,
+        username,
+        password,
+        refresh_token=entry.data.get(CONF_REFRESH_TOKEN),
+        user_id=entry.data.get(CONF_USER_ID),
+        api_key=entry.data.get(CONF_API_KEY),
+    )
 
     # Test the connection
     try:
@@ -50,6 +67,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryAuthFailed("Invalid authentication") from err
     except WhiskerConnectionError as err:
         raise ConfigEntryNotReady(f"Connection error: {err}") from err
+
+    credentials = {
+        CONF_USERNAME: username,
+        CONF_REFRESH_TOKEN: client.refresh_token,
+        CONF_USER_ID: client.user_id,
+        CONF_API_KEY: client.api_key,
+    }
+    if entry.data != credentials:
+        hass.config_entries.async_update_entry(
+            entry, data=credentials, version=2, minor_version=1
+        )
 
     # Create the coordinator
     coordinator = WhiskerDataUpdateCoordinator(hass, client, session, scan_interval)

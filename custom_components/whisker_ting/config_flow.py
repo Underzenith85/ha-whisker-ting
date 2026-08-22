@@ -19,8 +19,11 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .api import WhiskerApiClient, WhiskerAuthError, WhiskerConnectionError
 from .auth import AuthenticationError
 from .const import (
+    CONF_API_KEY,
     CONF_PASSWORD,
+    CONF_REFRESH_TOKEN,
     CONF_SCAN_INTERVAL,
+    CONF_USER_ID,
     CONF_USERNAME,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
@@ -34,7 +37,8 @@ _LOGGER = logging.getLogger(__name__)
 class WhiskerConfigFlowHandler(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Whisker Ting."""
 
-    VERSION = 1
+    VERSION = 2
+    MINOR_VERSION = 1
 
     @staticmethod
     @callback
@@ -73,7 +77,9 @@ class WhiskerConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                     title=title,
                     data={
                         CONF_USERNAME: username,
-                        CONF_PASSWORD: password,
+                        CONF_REFRESH_TOKEN: client.refresh_token,
+                        CONF_USER_ID: client.user_id,
+                        CONF_API_KEY: client.api_key,
                     },
                 )
 
@@ -124,7 +130,9 @@ class WhiskerConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                     self._get_reauth_entry(),
                     data_updates={
                         CONF_USERNAME: username,
-                        CONF_PASSWORD: password,
+                        CONF_REFRESH_TOKEN: client.refresh_token,
+                        CONF_USER_ID: client.user_id,
+                        CONF_API_KEY: client.api_key,
                     },
                 )
 
