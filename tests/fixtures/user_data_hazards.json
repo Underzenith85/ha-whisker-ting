@@ -1,0 +1,69 @@
+{
+  "id": 42,
+  "email": "person@example.invalid",
+  "firstName": "Example",
+  "lastName": "User",
+  "phoneNumber": "+1555010000",
+  "devices": [
+    {
+      "serialNumber": "NORMAL-001",
+      "name": "Utility Room",
+      "type": "FireSensor",
+      "siteId": 100,
+      "version": "1.2.3",
+      "isFire": false,
+      "isHvacVerified": true,
+      "hasFrozenPipe": false,
+      "isOwner": true,
+      "group": {"id": 10, "name": "Home"},
+      "fireHazardStatus": {
+        "learningMode": false,
+        "message": "No Hazards Detected",
+        "efhStatus": {"status": null, "level": 0},
+        "ufhStatus": {"status": null, "level": 0}
+      }
+    },
+    {
+      "serialNumber": "LEARNING-002",
+      "type": "FireSensor",
+      "siteId": 100,
+      "fireHazardStatus": {"learningMode": true}
+    },
+    {
+      "serialNumber": "EFH-003",
+      "type": "FireSensor",
+      "siteId": 200,
+      "fireHazardStatus": {
+        "efhStatus": {
+          "status": "Detected",
+          "timestampUtc": "2026-01-01T00:00:00Z",
+          "level": 2,
+          "message": "Electrical hazard"
+        }
+      }
+    },
+    {
+      "serialNumber": "UFH-004",
+      "type": "FutureSensorType",
+      "siteId": 200,
+      "fireHazardStatus": {
+        "ufhStatus": {"status": "Detected", "level": 1}
+      }
+    }
+  ],
+  "sites": [
+    {
+      "id": 100,
+      "userId": 42,
+      "displayName": "Home",
+      "city": "Exampleville",
+      "latitude": 40.1,
+      "longitude": -74.2
+    },
+    {
+      "id": 200,
+      "userId": 42,
+      "displayName": "Workshop"
+    }
+  ]
+}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -82,10 +83,6 @@ class DeviceState:
     group_name: str | None = None
     group_id: int | None = None
 
-    # Raw data for debugging
-    raw_data: dict[str, Any] = field(default_factory=dict)
-
-
 @dataclass
 class Site:
     """Represents a site/location."""
@@ -125,6 +122,61 @@ class WhiskerAuthError(WhiskerApiError):
 
 class WhiskerConnectionError(WhiskerApiError):
     """Connection error."""
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    """Return a mapping or an empty mapping for missing/null/malformed values."""
+    return value if isinstance(value, dict) else {}
+
+
+def _collection(value: Any) -> list[Any]:
+    """Return an API list or an empty list for malformed collections."""
+    return value if isinstance(value, list) else []
+
+
+def _optional_string(value: Any) -> str | None:
+    """Return a string value, excluding empty and non-string values."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _string(value: Any, default: str = "") -> str:
+    """Return a non-empty string or a deterministic default."""
+    return _optional_string(value) or default
+
+
+def _integer(value: Any, default: int = 0) -> int:
+    """Return an integer without accepting booleans or coercing arbitrary data."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else default
+
+
+def _optional_integer(value: Any) -> int | None:
+    """Return an integer or None for malformed values."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _identifier(value: Any) -> int | None:
+    """Return a positive integer identifier or None."""
+    value = _optional_integer(value)
+    return value if value is not None and value > 0 else None
+
+
+def _optional_number(value: Any) -> float | None:
+    """Return a finite-style numeric value without accepting booleans."""
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    ):
+        return float(value)
+    return None
+
+
+def _boolean(value: Any) -> bool:
+    """Return only an explicit API boolean as a boolean."""
+    return value if isinstance(value, bool) else False
 
 
 class WhiskerApiClient:
@@ -295,95 +347,112 @@ class WhiskerApiClient:
 
     def _parse_user_data(self, data: dict[str, Any]) -> UserData:
         """Parse user data from API response."""
-        devices = []
-        for device_data in data.get("devices", []):
-            device = self._parse_device(device_data)
-            devices.append(device)
+        devices: list[DeviceState] = []
+        for index, device_data in enumerate(_collection(data.get("devices"))):
+            if not isinstance(device_data, dict):
+                _LOGGER.warning("Skipping malformed device at index %d", index)
+                continue
+            serial_number = _optional_string(device_data.get("serialNumber"))
+            if serial_number is None:
+                _LOGGER.warning(
+                    "Skipping device at index %d without a valid serial number", index
+                )
+                continue
+            devices.append(self._parse_device(device_data, serial_number))
 
-        sites = []
-        for site_data in data.get("sites", []):
+        sites: list[Site] = []
+        for index, site_data in enumerate(_collection(data.get("sites"))):
+            if not isinstance(site_data, dict):
+                _LOGGER.warning("Skipping malformed site at index %d", index)
+                continue
+            site_id = _identifier(site_data.get("id"))
+            if site_id is None:
+                _LOGGER.warning("Skipping site at index %d without a valid ID", index)
+                continue
             site = Site(
-                id=site_data.get("id", 0),
-                user_id=site_data.get("userId", 0),
-                display_name=site_data.get("displayName", ""),
-                address_line1=site_data.get("addressLine1"),
-                city=site_data.get("city"),
-                state_province=site_data.get("stateProvince"),
-                postal_code=site_data.get("postalCode"),
-                country=site_data.get("country"),
-                latitude=site_data.get("latitude"),
-                longitude=site_data.get("longitude"),
+                id=site_id,
+                user_id=_integer(site_data.get("userId")),
+                display_name=_string(site_data.get("displayName")),
+                address_line1=_optional_string(site_data.get("addressLine1")),
+                city=_optional_string(site_data.get("city")),
+                state_province=_optional_string(site_data.get("stateProvince")),
+                postal_code=_optional_string(site_data.get("postalCode")),
+                country=_optional_string(site_data.get("country")),
+                latitude=_optional_number(site_data.get("latitude")),
+                longitude=_optional_number(site_data.get("longitude")),
             )
             sites.append(site)
 
         return UserData(
-            user_id=data.get("id", 0),
-            email=data.get("email", ""),
-            first_name=data.get("firstName", ""),
-            last_name=data.get("lastName", ""),
-            phone_number=data.get("phoneNumber"),
+            user_id=_integer(data.get("id")),
+            email=_string(data.get("email")),
+            first_name=_string(data.get("firstName")),
+            last_name=_string(data.get("lastName")),
+            phone_number=_optional_string(data.get("phoneNumber")),
             devices=devices,
             sites=sites,
         )
 
-    def _parse_device(self, data: dict[str, Any]) -> DeviceState:
+    def _parse_device(
+        self, data: dict[str, Any], serial_number: str | None = None
+    ) -> DeviceState:
         """Parse device state from API response."""
+        serial_number = serial_number or _optional_string(data.get("serialNumber"))
+        if serial_number is None:
+            raise ValueError("Device has no valid serial number")
+
         # Parse fire hazard status
-        fhs_data = data.get("fireHazardStatus", {})
-        efh_data = fhs_data.get("efhStatus", {})
-        ufh_data = fhs_data.get("ufhStatus", {})
-        hex_colors = fhs_data.get("hexColor", {})
+        fhs_data = _mapping(data.get("fireHazardStatus"))
+        efh_data = _mapping(fhs_data.get("efhStatus"))
+        ufh_data = _mapping(fhs_data.get("ufhStatus"))
+        hex_colors = _mapping(fhs_data.get("hexColor"))
 
         efh_status = HazardStatus(
-            status=efh_data.get("status"),
-            timestamp_utc=efh_data.get("timestampUtc"),
-            level=efh_data.get("level"),
-            message=efh_data.get("message", "No Hazards Detected"),
-            hex_color=efh_data.get("hexColor", "#00FF00"),
+            status=_optional_string(efh_data.get("status")),
+            timestamp_utc=_optional_string(efh_data.get("timestampUtc")),
+            level=_optional_integer(efh_data.get("level")),
+            message=_string(efh_data.get("message"), "No Hazards Detected"),
+            hex_color=_string(efh_data.get("hexColor"), "#00FF00"),
         )
 
         ufh_status = HazardStatus(
-            status=ufh_data.get("status"),
-            timestamp_utc=ufh_data.get("timestampUtc"),
-            level=ufh_data.get("level"),
-            message=ufh_data.get("message", "No Hazards Detected"),
-            hex_color=ufh_data.get("hexColor", "#00FF00"),
+            status=_optional_string(ufh_data.get("status")),
+            timestamp_utc=_optional_string(ufh_data.get("timestampUtc")),
+            level=_optional_integer(ufh_data.get("level")),
+            message=_string(ufh_data.get("message"), "No Hazards Detected"),
+            hex_color=_string(ufh_data.get("hexColor"), "#00FF00"),
         )
 
         fire_hazard_status = FireHazardStatus(
-            learning_mode=fhs_data.get("learningMode", False),
-            message=fhs_data.get("message", "No Hazards Detected"),
+            learning_mode=_boolean(fhs_data.get("learningMode")),
+            message=_string(fhs_data.get("message"), "No Hazards Detected"),
             efh_status=efh_status,
             ufh_status=ufh_status,
-            hex_color_light=hex_colors.get("light", "#00FF00"),
-            hex_color_medium=hex_colors.get("medium", "#358C15"),
-            hex_color_dark=hex_colors.get("dark", "#233016"),
+            hex_color_light=_string(hex_colors.get("light"), "#00FF00"),
+            hex_color_medium=_string(hex_colors.get("medium"), "#358C15"),
+            hex_color_dark=_string(hex_colors.get("dark"), "#233016"),
         )
 
         # Parse group info
-        group_data = data.get("group", {})
-
-        # Get station_id for WebSocket - it's the serial number
-        station_id = data.get("serialNumber", "")
+        group_data = _mapping(data.get("group"))
 
         return DeviceState(
-            serial_number=data.get("serialNumber", ""),
-            name=data.get("name", data.get("serialNumber", "")),
-            device_type=data.get("type", "Unknown"),
-            site_id=data.get("siteId", 0),
-            version=data.get("version"),
-            wifi_mac_address=data.get("wifiMacAddress"),
-            bluetooth_mac_address=data.get("bluetoothMacAddress"),
-            soc_serial_number=data.get("socSerialNumber"),
-            station_id=station_id,
-            is_fire=data.get("isFire", False),
-            is_hvac_verified=data.get("isHvacVerified", False),
-            has_frozen_pipe=data.get("hasFrozenPipe", False),
-            is_owner=data.get("isOwner", False),
+            serial_number=serial_number,
+            name=_string(data.get("name"), serial_number),
+            device_type=_string(data.get("type"), "Unknown"),
+            site_id=_integer(data.get("siteId")),
+            version=_optional_string(data.get("version")),
+            wifi_mac_address=_optional_string(data.get("wifiMacAddress")),
+            bluetooth_mac_address=_optional_string(data.get("bluetoothMacAddress")),
+            soc_serial_number=_optional_string(data.get("socSerialNumber")),
+            station_id=serial_number,
+            is_fire=_boolean(data.get("isFire")),
+            is_hvac_verified=_boolean(data.get("isHvacVerified")),
+            has_frozen_pipe=_boolean(data.get("hasFrozenPipe")),
+            is_owner=_boolean(data.get("isOwner")),
             fire_hazard_status=fire_hazard_status,
-            group_name=group_data.get("name"),
-            group_id=group_data.get("id"),
-            raw_data=data,
+            group_name=_optional_string(group_data.get("name")),
+            group_id=_optional_integer(group_data.get("id")),
         )
 
     async def get_all_device_states(self) -> dict[str, DeviceState]:
