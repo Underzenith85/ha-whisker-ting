@@ -155,9 +155,7 @@ def test_handshake_succeeds_with_terminated_empty_response() -> None:
             FakeMessage(websocket.aiohttp.WSMsgType.TEXT, "{}\x1e")
         )
         await client._perform_handshake()
-        assert transport.text_sent == [
-            '{"protocol":"messagepack","version":1}\x1e'
-        ]
+        assert transport.text_sent == ['{"protocol":"messagepack","version":1}\x1e']
 
     asyncio.run(scenario())
 
@@ -174,18 +172,56 @@ def test_handshake_timeout_is_a_protocol_failure() -> None:
     asyncio.run(scenario())
 
 
-def test_handshake_rejects_unexpected_websocket_type() -> None:
-    """Binary and control messages cannot masquerade as a handshake response."""
+def test_handshake_accepts_binary_response() -> None:
+    """Ting sends its MessagePack handshake response as binary data."""
 
     async def scenario() -> None:
         client, transport = _client()
         transport.responses.append(
             FakeMessage(websocket.aiohttp.WSMsgType.BINARY, b"{}\x1e")
         )
-        with pytest.raises(signalr.SignalRHandshakeError, match="not text"):
-            await client._perform_handshake()
+        assert await client._perform_handshake() is None
 
     asyncio.run(scenario())
+
+
+def test_power_quality_categorical_updates_are_modeled() -> None:
+    """Frequency and THD records from the 3.0.4 stream reach their callback."""
+    updates: list[tuple[str, websocket.PowerQualityData]] = []
+    client, _ = _client()
+    client._on_power_quality_update = lambda station, reading: updates.append(
+        (station, reading)
+    )
+    frame = signalr.encode_hub_message(
+        [
+            1,
+            {},
+            None,
+            "updateGraphMultiCategorical",
+            [
+                [
+                    {
+                        "Category": "frequency",
+                        "ObsTime": "2026-08-22T00:00:00Z",
+                        "Value": "60.01",
+                    },
+                    {
+                        "Category": "thdAvg",
+                        "ObsTime": "2026-08-22T00:00:00Z",
+                        "Value": "2.4",
+                    },
+                ]
+            ],
+        ]
+    )
+
+    assert client._handle_binary_message(frame) == []
+    assert [
+        (station, reading.category, reading.value) for station, reading in updates
+    ] == [
+        ("ABC123", "frequency", 60.01),
+        ("ABC123", "thdAvg", 2.4),
+    ]
 
 
 def test_close_transitions_and_notifies_exactly_once() -> None:
@@ -200,9 +236,7 @@ def test_close_transitions_and_notifies_exactly_once() -> None:
         transport.responses.append(
             FakeMessage(
                 websocket.aiohttp.WSMsgType.BINARY,
-                signalr.encode_hub_message(
-                    [7, "api_key=secret-value", True]
-                ),
+                signalr.encode_hub_message([7, "api_key=secret-value", True]),
             )
         )
 
@@ -210,9 +244,7 @@ def test_close_transitions_and_notifies_exactly_once() -> None:
         client._transition_disconnected("second transition")
 
         assert not client.connected
-        assert notifications == [
-            ("ABC123", "api_key=[redacted]", True)
-        ]
+        assert notifications == [("ABC123", "api_key=[redacted]", True)]
 
     asyncio.run(scenario())
 
@@ -222,9 +254,7 @@ def test_server_close_can_disable_manager_reconnect() -> None:
     manager = websocket.WhiskerWebSocketManager(object())
     manager._connections["ABC123"] = object()
 
-    manager._handle_disconnect(
-        "ABC123", "server closed the SignalR connection", False
-    )
+    manager._handle_disconnect("ABC123", "server closed the SignalR connection", False)
 
     assert "ABC123" not in manager._connections
     assert manager._reconnect_tasks == {}
@@ -244,9 +274,7 @@ def test_manager_reconnect_uses_exponential_backoff() -> None:
         with (
             patch.object(websocket.asyncio, "sleep", sleep),
             patch.object(websocket.random, "uniform", return_value=2),
-            patch.object(
-                websocket, "WhiskerWebSocket", return_value=replacement
-            ),
+            patch.object(websocket, "WhiskerWebSocket", return_value=replacement),
         ):
             manager._handle_disconnect("ABC123", "transport closed", True)
             await manager._reconnect_tasks["ABC123"]
@@ -264,9 +292,10 @@ def test_multi_device_station_state_is_independent() -> None:
     async def scenario() -> None:
         availability: list[tuple[str, bool]] = []
         manager = websocket.WhiskerWebSocketManager(
-            object(), on_availability_update=lambda station, live: availability.append(
+            object(),
+            on_availability_update=lambda station, live: availability.append(
                 (station, live)
-            )
+            ),
         )
         clients = [MagicMock(connected=True), MagicMock(connected=True)]
         for client in clients:

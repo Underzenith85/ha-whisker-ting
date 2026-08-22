@@ -66,6 +66,24 @@
       }
     },
     "sensor": {
+      "frequency": {
+        "name": "Frequency"
+      },
+      "thd_min": {
+        "name": "THD minimum"
+      },
+      "thd_average": {
+        "name": "THD average"
+      },
+      "thd_max": {
+        "name": "THD maximum"
+      },
+      "current_outdoor_temperature": {
+        "name": "Current outdoor temperature"
+      },
+      "current_outage_risk": {
+        "name": "Current outage risk"
+      },
       "hazard_status": {
         "name": "Hazard Status",
         "state": {

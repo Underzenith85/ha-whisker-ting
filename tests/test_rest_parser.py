@@ -90,6 +90,47 @@ def test_malformed_top_level_collections_are_empty() -> None:
     assert result.sites == []
 
 
+@pytest.mark.asyncio
+async def test_applies_3_0_4_conditions_by_site_and_device() -> None:
+    """The current Ting conditions snapshot augments its full user response."""
+    client = _client()
+    device = api.DeviceState(
+        serial_number="SERIAL-001",
+        name="Home",
+        device_type="FireSensor",
+        site_id=100,
+    )
+    client.get_user_data = AsyncMock(
+        return_value=api.UserData(42, "", "", "", devices=[device])
+    )
+    client.get_user_conditions = AsyncMock(
+        return_value={
+            "devices": [
+                {
+                    "serialNumber": "SERIAL-001",
+                    "isFire": True,
+                    "hasFrozenPipe": True,
+                }
+            ],
+            "currentTemperatures": {"100": -3.5},
+            "currentOutageRisks": {
+                "100": {
+                    "status": "elevated",
+                    "level": 2,
+                    "nested": {"must": "not be retained"},
+                }
+            },
+        }
+    )
+
+    result = (await client.get_all_device_states())["SERIAL-001"]
+
+    assert result.is_fire
+    assert result.has_frozen_pipe
+    assert result.current_temperature_c == -3.5
+    assert result.current_outage_risk == {"status": "elevated", "level": 2}
+
+
 def test_non_finite_coordinates_are_discarded() -> None:
     """NaN and infinity cannot be retained as site coordinates."""
     result = _client()._parse_user_data(

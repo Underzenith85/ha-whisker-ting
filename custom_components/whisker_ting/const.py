@@ -10,6 +10,7 @@ COGNITO_CLIENT_ID = "4akjeqt9gtl8rgg1cksunipk9u"
 # API Configuration
 API_BASE_URL = "https://api.wskr.io"
 API_USERS_ENDPOINT = "/api/v1/Users/{user_id}"
+API_USER_CONDITIONS_ENDPOINT = "/api/v1/Users/{user_id}/conditions"
 API_FROZEN_PIPE_STATUS_ENDPOINT = "/api/v1/FrozenPipe/{serial_number}"
 API_FROZEN_PIPE_HISTORY_ENDPOINT = "/api/v1/FrozenPipe/{serial_number}/currentHistory"
 API_NOTIFICATION_HISTORY_ENDPOINT = "/api/v1/Notifications/history/{user_id}"
