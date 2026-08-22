@@ -19,6 +19,7 @@ from custom_components.whisker_ting.api import (
     DeviceState,
     FrozenPipeData,
     Site,
+    TingEvent,
     UserData,
     WhiskerApiError,
 )
@@ -261,6 +262,94 @@ def test_site_and_device_registry_identity_survive_renames_and_missing_sites() -
     assert entity.device_info["name"] == "Renamed"
     coordinator.sites = {}
     assert not entity.available
+
+
+def test_structured_event_entities_select_newest_matching_event() -> None:
+    """Known transitions expose timestamps while future types remain generic."""
+    device = DeviceState("SERIAL-001", "Device", "FireSensor", 100)
+    device.events = [
+        TingEvent(
+            "FutureEventType",
+            "2026-08-22T12:00:00+00:00",
+            serial_number=device.serial_number,
+        ),
+        TingEvent(
+            "PowerRestored",
+            "2026-08-22T11:00:00+00:00",
+            serial_number=device.serial_number,
+            event_kind="power_restored",
+        ),
+        TingEvent(
+            "PowerRestored",
+            "malformed",
+            serial_number=device.serial_number,
+            event_kind="power_restored",
+        ),
+    ]
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.data = {device.serial_number: device}
+    descriptions = {description.key: description for description in SENSOR_DESCRIPTIONS}
+
+    latest = WhiskerSensor(
+        coordinator, device.serial_number, descriptions["latest_event"]
+    )
+    restoration = WhiskerSensor(
+        coordinator, device.serial_number, descriptions["last_power_restoration"]
+    )
+
+    assert latest.native_value == "FutureEventType"
+    assert restoration.native_value == datetime(2026, 8, 22, 11, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_site_only_events_are_not_assigned_to_sensor_devices(
+    hass: HomeAssistant,
+) -> None:
+    """Coordinator scopes events to their explicit device or site owner."""
+    device = DeviceState("SERIAL-001", "Device", "FireSensor", 100)
+    site = Site(100, 42, "Home")
+    client = MagicMock(api_key=None, user_id=None)
+    client.sites = {site.id: site}
+    client.get_all_device_states = AsyncMock(
+        return_value={device.serial_number: device}
+    )
+    client.get_event_history = AsyncMock(
+        return_value=[
+            TingEvent(
+                "PowerOutage",
+                "2026-08-22T10:00:00+00:00",
+                site_id=site.id,
+                event_kind="power_outage",
+            ),
+            TingEvent(
+                "DeviceOffline",
+                "2026-08-22T09:00:00+00:00",
+                serial_number=device.serial_number,
+                event_kind="device_offline",
+            ),
+            TingEvent(
+                "PowerOutage",
+                "2026-08-22T08:00:00+00:00",
+                site_id=999,
+                event_kind="power_outage",
+            ),
+        ]
+    )
+    client.get_frozen_pipe_data = AsyncMock(return_value=FrozenPipeData())
+    manager = MagicMock()
+    manager.disconnect_all = AsyncMock()
+
+    with patch(
+        "custom_components.whisker_ting.coordinator.WhiskerWebSocketManager",
+        return_value=manager,
+    ):
+        coordinator = WhiskerDataUpdateCoordinator(hass, client, MagicMock())
+        await coordinator._async_update_data()
+        await coordinator.async_shutdown()
+
+    assert [event.event_type for event in device.events] == ["DeviceOffline"]
+    assert [event.event_type for event in site.events] == ["PowerOutage"]
 
 
 def test_only_realtime_entities_become_unavailable_on_stream_loss() -> None:

@@ -118,7 +118,9 @@ class TingEvent:
 
     event_type: str
     timestamp_utc: str
-    serial_number: str
+    serial_number: str | None = None
+    site_id: int | None = None
+    event_kind: str | None = None
     event_id: str | None = None
     category: str | None = None
     title: str | None = None
@@ -173,6 +175,7 @@ class Site:
     current_outage_risk: (
         str | int | float | dict[str, str | int | float | bool] | None
     ) = None
+    events: list[TingEvent] = field(default_factory=list)
 
 
 @dataclass

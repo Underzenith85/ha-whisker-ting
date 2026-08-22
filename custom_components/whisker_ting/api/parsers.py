@@ -178,11 +178,13 @@ def parse_event_history(data: Any) -> list[TingEvent]:
     if not isinstance(data, list):
         return []
     events: list[TingEvent] = []
+    seen: set[tuple[object, ...]] = set()
     for value in data:
         if not isinstance(value, dict):
             continue
         event_type = optional_string(value.get("eventType"))
         serial_number = optional_string(value.get("serialNumber"))
+        site_id = identifier(value.get("siteId"))
         timestamp = parse_datetime(
             first_optional_string(
                 value,
@@ -192,20 +194,75 @@ def parse_event_history(data: Any) -> list[TingEvent]:
                 "eventTimestampLocal",
             )
         )
-        if event_type is None or serial_number is None or timestamp is None:
+        if (
+            event_type is None
+            or (serial_number is None and site_id is None)
+            or timestamp is None
+        ):
             continue
+        event_id = optional_identifier_string(value.get("id"))
+        identity = (
+            ("id", event_id)
+            if event_id is not None
+            else (
+                "content",
+                event_type,
+                timestamp.isoformat(),
+                serial_number,
+                site_id,
+            )
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
         events.append(
             TingEvent(
                 event_type=event_type,
                 timestamp_utc=timestamp.isoformat(),
                 serial_number=serial_number,
-                event_id=optional_identifier_string(value.get("id")),
+                site_id=site_id,
+                event_kind=classify_event_type(event_type),
+                event_id=event_id,
                 category=optional_string(value.get("eventCategory")),
                 title=optional_string(value.get("title")),
                 message=optional_string(value.get("message")),
             )
         )
-    return sorted(events, key=lambda event: event.timestamp_utc, reverse=True)
+    return sorted(
+        events,
+        key=lambda event: (event.timestamp_utc, event.event_id or ""),
+        reverse=True,
+    )
+
+
+_EVENT_TYPE_KINDS = {
+    "poweroutage": "power_outage",
+    "outage": "power_outage",
+    "powerrestored": "power_restored",
+    "powerrestoration": "power_restored",
+    "generatoron": "generator_on",
+    "generatoroff": "generator_off",
+    "voltagesag": "voltage_sag",
+    "voltageswell": "voltage_swell",
+    "nogrounding": "no_grounding",
+    "noground": "no_grounding",
+    "hightemperature": "high_temperature",
+    "lowtemperature": "low_temperature",
+    "fire": "fire_event",
+    "fireevent": "fire_event",
+    "utilityfire": "utility_fire_event",
+    "utilityfireevent": "utility_fire_event",
+    "deviceonline": "device_online",
+    "deviceoffline": "device_offline",
+}
+
+
+def classify_event_type(event_type: str) -> str | None:
+    """Map an explicit known Ting event type to an automation-safe kind."""
+    normalized = "".join(
+        character for character in event_type.lower() if character.isalnum()
+    )
+    return _EVENT_TYPE_KINDS.get(normalized)
 
 
 def parse_user_data(data: Any) -> UserData:

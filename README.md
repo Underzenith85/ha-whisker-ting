@@ -104,6 +104,13 @@ registry identity, and precise coordinates and street addresses are not exposed.
 | Frozen pipe detected location | Disabled | Conditioned, unconditioned, or unknown-space classification |
 | Frozen pipe last event | Disabled | Latest modeled frozen-pipe event timestamp |
 | Latest event | Enabled | Latest read-only Ting notification for the device |
+| Last power outage/restoration | Disabled | Newest matching outage and restoration timestamps |
+| Last generator start/stop | Disabled | Newest matching generator transition timestamps |
+| Last voltage sag/swell | Disabled | Newest matching voltage excursion timestamps |
+| Last no-grounding warning | Disabled | Newest matching grounding-warning timestamp |
+| Last high/low-temperature alert | Disabled | Newest matching temperature-alert timestamps |
+| Last fire/utility-fire event | Disabled | Newest matching fire-event timestamps |
+| Last device online/offline | Disabled | Newest matching device-connectivity timestamps |
 | Stream health | Enabled | Health of the device's live voltage stream |
 | Hazard severity level | Disabled | Ting hazard workflow severity value |
 | Device type | Enabled | Ting device type |
@@ -159,6 +166,30 @@ When notification history is available, the latest-event sensor can expose:
 - Number of retained events in the current history window
 
 Notification history is read-only. The integration does not acknowledge, clear, or alter Ting notifications.
+
+Known event types are also exposed as disabled-by-default timestamp entities on
+their explicitly associated Ting sensor or site device. Unknown future event types
+remain visible through **Latest event**. Events without a valid sensor or site ID are
+not assigned heuristically.
+
+For example, after enabling **Last power outage** on a site device, an automation can
+react whenever Ting reports a newer outage:
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: sensor.home_last_power_outage
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.from_state is not none and
+         trigger.to_state.state not in ['unknown', 'unavailable'] and
+         trigger.to_state.state != trigger.from_state.state }}
+actions:
+  - action: notify.notify
+    data:
+      message: "Ting reported a power outage at home."
+```
 
 ## Limitations
 

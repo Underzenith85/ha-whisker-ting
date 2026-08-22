@@ -150,6 +150,45 @@
       "latest_event": {
         "name": "Latest Event"
       },
+      "last_power_outage": {
+        "name": "Last power outage"
+      },
+      "last_power_restoration": {
+        "name": "Last power restoration"
+      },
+      "last_generator_on": {
+        "name": "Last generator start"
+      },
+      "last_generator_off": {
+        "name": "Last generator stop"
+      },
+      "last_voltage_sag": {
+        "name": "Last voltage sag"
+      },
+      "last_voltage_swell": {
+        "name": "Last voltage swell"
+      },
+      "last_no_grounding_warning": {
+        "name": "Last no-grounding warning"
+      },
+      "last_high_temperature_alert": {
+        "name": "Last high-temperature alert"
+      },
+      "last_low_temperature_alert": {
+        "name": "Last low-temperature alert"
+      },
+      "last_fire_event": {
+        "name": "Last fire event"
+      },
+      "last_utility_fire_event": {
+        "name": "Last utility-fire event"
+      },
+      "last_device_online": {
+        "name": "Last device online"
+      },
+      "last_device_offline": {
+        "name": "Last device offline"
+      },
       "hazard_severity_level": {
         "name": "Hazard Severity Level"
       },

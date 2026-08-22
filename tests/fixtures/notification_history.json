@@ -24,6 +24,18 @@
     "eventTimestampUtc": "2026-08-20T17:00:00Z"
   },
   {
+    "id": "site-outage",
+    "siteId": 100,
+    "eventType": "PowerOutage",
+    "eventTimestampUtc": "2026-08-20T19:00:00Z"
+  },
+  {
+    "id": "event-new",
+    "serialNumber": "SERIAL-001",
+    "eventType": "PowerRestored",
+    "eventTimestampUtc": "2026-08-20T18:30:00Z"
+  },
+  {
     "id": "unscoped",
     "eventType": "WeatherAlert",
     "eventTimestampUtc": "2026-08-20T19:00:00Z"

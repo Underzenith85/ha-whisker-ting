@@ -220,9 +220,13 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
 
             events = await self.client.get_event_history()
             for event in events:
-                device = data.get(event.serial_number)
+                device = data.get(event.serial_number) if event.serial_number else None
                 if device is not None:
                     device.events.append(event)
+                elif event.site_id is not None and (
+                    site := self.sites.get(event.site_id)
+                ):
+                    site.events.append(event)
 
             frozen_pipe_results = await asyncio.gather(
                 *(
