@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -13,7 +14,11 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, UnitOfElectricPotential
+from homeassistant.const import (
+    EntityCategory,
+    UnitOfElectricPotential,
+    UnitOfTemperature,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -42,7 +47,9 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
         suggested_display_precision=2,
-        value_fn=lambda state: state.voltage.voltage if state.voltage.voltage > 0 else None,
+        value_fn=lambda state: (
+            state.voltage.voltage if state.voltage.voltage > 0 else None
+        ),
     ),
     WhiskerSensorEntityDescription(
         key="voltage_high",
@@ -51,7 +58,9 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
         suggested_display_precision=2,
-        value_fn=lambda state: state.voltage.voltage_hi if state.voltage.voltage_hi > 0 else None,
+        value_fn=lambda state: (
+            state.voltage.voltage_hi if state.voltage.voltage_hi > 0 else None
+        ),
     ),
     WhiskerSensorEntityDescription(
         key="voltage_low",
@@ -60,7 +69,9 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
         suggested_display_precision=2,
-        value_fn=lambda state: state.voltage.voltage_lo if state.voltage.voltage_lo > 0 else None,
+        value_fn=lambda state: (
+            state.voltage.voltage_lo if state.voltage.voltage_lo > 0 else None
+        ),
     ),
     WhiskerSensorEntityDescription(
         key="average_peaks_max",
@@ -70,7 +81,11 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
         suggested_display_precision=2,
         entity_registry_enabled_default=False,
-        value_fn=lambda state: state.voltage.average_peaks_max if state.voltage.average_peaks_max > 0 else None,
+        value_fn=lambda state: (
+            state.voltage.average_peaks_max
+            if state.voltage.average_peaks_max > 0
+            else None
+        ),
     ),
     # Primary status sensors (enabled by default)
     WhiskerSensorEntityDescription(
@@ -110,6 +125,47 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
         key="ufh_message",
         translation_key="ufh_message",
         value_fn=lambda state: state.fire_hazard_status.ufh_status.message,
+    ),
+    WhiskerSensorEntityDescription(
+        key="frozen_pipe_risk_level",
+        translation_key="frozen_pipe_risk_level",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda state: (
+            state.frozen_pipe.status.level if state.frozen_pipe.status else None
+        ),
+    ),
+    WhiskerSensorEntityDescription(
+        key="frozen_pipe_outdoor_temperature",
+        translation_key="frozen_pipe_outdoor_temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        suggested_display_precision=1,
+        entity_registry_enabled_default=False,
+        value_fn=lambda state: (
+            state.frozen_pipe.status.outdoor_temperature_c
+            if state.frozen_pipe.status
+            else None
+        ),
+    ),
+    WhiskerSensorEntityDescription(
+        key="frozen_pipe_detected_location",
+        translation_key="frozen_pipe_detected_location",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda state: (
+            state.frozen_pipe.status.detected_location_type
+            if state.frozen_pipe.status
+            else None
+        ),
+    ),
+    WhiskerSensorEntityDescription(
+        key="frozen_pipe_last_event",
+        translation_key="frozen_pipe_last_event",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda state: _get_frozen_pipe_last_event(state),
     ),
     WhiskerSensorEntityDescription(
         key="device_type",
@@ -161,6 +217,24 @@ REALTIME_SENSOR_KEYS = {
     "voltage_low",
     "average_peaks_max",
 }
+
+
+def _get_frozen_pipe_last_event(state: DeviceState) -> datetime | None:
+    """Return the newest modeled frozen-pipe timestamp."""
+    records = ([state.frozen_pipe.status] if state.frozen_pipe.status else []) + list(
+        state.frozen_pipe.history
+    )
+    timestamps: list[datetime] = []
+    for record in records:
+        if record.timestamp_utc is None:
+            continue
+        try:
+            timestamps.append(
+                datetime.fromisoformat(record.timestamp_utc.replace("Z", "+00:00"))
+            )
+        except ValueError:
+            continue
+    return max(timestamps, default=None)
 
 
 def _get_hazard_status(state: DeviceState) -> str:

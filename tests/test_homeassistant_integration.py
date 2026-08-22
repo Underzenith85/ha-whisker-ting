@@ -17,6 +17,7 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 from custom_components.whisker_ting import async_unload_entry
 from custom_components.whisker_ting.api import (
     DeviceState,
+    FrozenPipeData,
     UserData,
     WhiskerApiError,
 )
@@ -76,9 +77,7 @@ async def test_config_flow_uses_ha_fixture_and_drops_password(
                 CONF_PASSWORD: "fixture-password",
             },
         )
-        result["result"].runtime_data = MagicMock(
-            async_shutdown=AsyncMock()
-        )
+        result["result"].runtime_data = MagicMock(async_shutdown=AsyncMock())
         await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
@@ -167,6 +166,7 @@ async def test_coordinator_connects_stream_once_and_disconnects_on_shutdown(
     client.get_all_device_states = AsyncMock(
         side_effect=[{device.serial_number: device}, {device.serial_number: device}]
     )
+    client.get_frozen_pipe_data = AsyncMock(return_value=FrozenPipeData())
     manager = MagicMock()
     manager.connect_device = AsyncMock(return_value=True)
     manager.wait_for_data = AsyncMock(return_value=False)

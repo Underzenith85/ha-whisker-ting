@@ -12,7 +12,13 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import DeviceState, VoltageReading, WhiskerApiClient, WhiskerApiError, WhiskerAuthError
+from .api import (
+    DeviceState,
+    VoltageReading,
+    WhiskerApiClient,
+    WhiskerApiError,
+    WhiskerAuthError,
+)
 from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
 from .websocket import VoltageData, WhiskerWebSocketManager
 
@@ -70,9 +76,7 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
         self.async_set_updated_data(self.data)
 
     @callback
-    def _handle_availability_update(
-        self, station_id: str, available: bool
-    ) -> None:
+    def _handle_availability_update(self, station_id: str, available: bool) -> None:
         """Publish a station availability transition through the throttle."""
         _LOGGER.debug(
             "Station %s real-time availability changed to %s",
@@ -93,7 +97,9 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
         )
 
     @callback
-    def _handle_voltage_update(self, station_id: str, voltage_data: VoltageData) -> None:
+    def _handle_voltage_update(
+        self, station_id: str, voltage_data: VoltageData
+    ) -> None:
         """Handle real-time voltage update from WebSocket."""
         if self.data is None:
             return
@@ -133,9 +139,8 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
 
         # Connect to each device's WebSocket stream
         for device_id, device_state in data.items():
-            if (
+            if device_state.station_id and not self._ws_manager.is_station_managed(
                 device_state.station_id
-                and not self._ws_manager.is_station_managed(device_state.station_id)
             ):
                 try:
                     connected = await self._ws_manager.connect_device(
@@ -170,6 +175,23 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
         try:
             data = await self.client.get_all_device_states()
 
+            frozen_pipe_results = await asyncio.gather(
+                *(
+                    self.client.get_frozen_pipe_data(device.serial_number)
+                    for device in data.values()
+                ),
+                return_exceptions=True,
+            )
+            for device, result in zip(data.values(), frozen_pipe_results, strict=True):
+                if isinstance(result, Exception):
+                    _LOGGER.debug(
+                        "Detailed frozen-pipe data unavailable for device %s: %s",
+                        device.serial_number,
+                        result,
+                    )
+                    continue
+                device.frozen_pipe = result
+
             # Preserve existing voltage data from WebSocket
             if self.data:
                 for device_id, device_state in data.items():
@@ -184,9 +206,7 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
             await self._connect_websocket(data)
             if self._ws_manager:
                 wait_tasks = [
-                    self._ws_manager.wait_for_data(
-                        device_state.station_id, timeout=5.0
-                    )
+                    self._ws_manager.wait_for_data(device_state.station_id, timeout=5.0)
                     for device_state in data.values()
                     if device_state.station_id
                     and self._ws_manager.is_station_managed(device_state.station_id)

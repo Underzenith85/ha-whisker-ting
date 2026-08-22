@@ -1,0 +1,21 @@
+{
+  "history": [
+    {
+      "level": 52,
+      "outdoorTemperatureC": -7.0,
+      "detectedLocationType": "UnknownSpace",
+      "timestampUtc": "2026-01-14T01:00:00Z",
+      "resolvedTimestampUtc": "2026-01-14T06:00:00Z",
+      "userAction": "ActionTurnedOnHeat",
+      "notificationType": "TAAllClear",
+      "notificationDeliveryMode": "Email"
+    },
+    {
+      "level": 55,
+      "outdoorTemperatureC": -8.5,
+      "detectedLocationType": "UnconditionedSpace",
+      "timestampUtc": "2026-01-15T03:04:05Z"
+    },
+    "malformed history record"
+  ]
+}
