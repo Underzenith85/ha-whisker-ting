@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,19 @@ def test_manifest_identity_and_required_fields() -> None:
     assert manifest["iot_class"] == "cloud_push"
     assert re.fullmatch(r"\d+\.\d+\.\d+", manifest["version"])
     assert isinstance(manifest["requirements"], list)
+
+
+def test_uv_project_matches_integration_release() -> None:
+    """The locked, non-packaged uv project tracks the integration release."""
+    manifest = _load_json(INTEGRATION / "manifest.json")
+    with (ROOT / "pyproject.toml").open("rb") as file:
+        pyproject = tomllib.load(file)
+
+    assert pyproject["project"]["version"] == manifest["version"]
+    assert pyproject["project"]["requires-python"] == ">=3.12,<3.13"
+    assert pyproject["tool"]["uv"]["package"] is False
+    assert (ROOT / "uv.lock").is_file()
+    assert not (ROOT / "requirements_test.txt").exists()
 
 
 def test_english_translation_matches_source_strings() -> None:

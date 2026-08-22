@@ -7,7 +7,7 @@ An unofficial Home Assistant integration for monitoring [Whisker Labs Ting](http
 > [!WARNING]
 > This is an independent community project. It is not created, maintained, affiliated with, authorized by, or endorsed by Whisker Labs, Inc. Ting and Whisker Labs are trademarks of their respective owner.
 
-The integration provides read-only access to Ting account, device, hazard, frozen-pipe, notification, current-condition, and real-time electrical data. Integration version 1.1.0 is aligned with the Ting 3.0.4 service behavior.
+The integration provides read-only access to Ting account, device, hazard, frozen-pipe, notification, current-condition, and real-time electrical data. Integration version 1.2.0 is aligned with the Ting 3.0.4 service behavior.
 
 > [!IMPORTANT]
 > This integration is not currently included in HACS's default repository list. Add
@@ -198,17 +198,21 @@ Debug output must not be shared without reviewing it for account or device infor
 
 ## Development
 
-Python 3.12 is required by the pinned Home Assistant test environment. From a clean checkout:
+Python 3.12 and [uv](https://docs.astral.sh/uv/) are required for development.
+From a clean checkout, create the locked development environment and run the
+checks with:
 
 ```bash
-python3.12 -m venv .venv
-. .venv/bin/activate
-python -m pip install -r requirements_test.txt
-python -m pytest
-python -m ruff check custom_components tests
-python -m mypy custom_components/whisker_ting/api/models.py custom_components/whisker_ting/auth/models.py custom_components/whisker_ting/auth/srp.py custom_components/whisker_ting/stream/models.py custom_components/whisker_ting/stream/signalr.py
-python -m compileall -q custom_components tests
+uv sync --locked
+uv run --no-sync pytest
+uv run --no-sync ruff check custom_components tests
+uv run --no-sync mypy custom_components/whisker_ting/api/models.py custom_components/whisker_ting/auth/models.py custom_components/whisker_ting/auth/srp.py custom_components/whisker_ting/stream/models.py custom_components/whisker_ting/stream/signalr.py
+uv run --no-sync python -m compileall -q custom_components tests
 ```
+
+Home Assistant continues to install the integration's runtime dependencies from
+`custom_components/whisker_ting/manifest.json`; the uv environment is only for
+development and CI.
 
 Tests must mock Ting and Cognito traffic. Never commit account credentials, tokens, device identifiers, or unsanitized API responses.
 
