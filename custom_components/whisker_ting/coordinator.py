@@ -234,6 +234,8 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
                 return_exceptions=True,
             )
             for device, result in zip(data.values(), frozen_pipe_results, strict=True):
+                if isinstance(result, WhiskerAuthError):
+                    raise result
                 if isinstance(result, Exception):
                     _LOGGER.debug(
                         "Detailed frozen-pipe data unavailable for device %s: %s",
