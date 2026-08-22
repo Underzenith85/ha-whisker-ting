@@ -18,6 +18,7 @@ from .const import (
     API_FROZEN_PIPE_HISTORY_ENDPOINT,
     API_FROZEN_PIPE_STATUS_ENDPOINT,
     API_NOTIFICATION_HISTORY_ENDPOINT,
+    API_USER_CONDITIONS_ENDPOINT,
     API_USERS_ENDPOINT,
 )
 
@@ -57,6 +58,10 @@ class VoltageReading:
     voltage_hi: float = 0.0
     voltage_lo: float = 0.0
     average_peaks_max: float = 0.0
+    frequency_hz: float | None = None
+    thd_min_percent: float | None = None
+    thd_avg_percent: float | None = None
+    thd_max_percent: float | None = None
 
 
 @dataclass
@@ -116,6 +121,10 @@ class DeviceState:
     has_frozen_pipe: bool = False
     is_owner: bool = False
     stream_health: str = "stopped"
+    current_temperature_c: float | None = None
+    current_outage_risk: (
+        str | int | float | dict[str, str | int | float | bool] | None
+    ) = None
 
     # Hazard status
     fire_hazard_status: FireHazardStatus = field(default_factory=FireHazardStatus)
@@ -233,6 +242,23 @@ def _optional_number(value: Any) -> float | None:
 def _boolean(value: Any) -> bool:
     """Return only an explicit API boolean as a boolean."""
     return value if isinstance(value, bool) else False
+
+
+def _bounded_scalar_mapping(value: Any) -> dict[str, str | int | float | bool] | None:
+    """Copy a small scalar-only API object without retaining its raw response."""
+    if not isinstance(value, dict):
+        return None
+    result: dict[str, str | int | float | bool] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or len(key) > 64 or len(result) >= 32:
+            continue
+        if isinstance(item, bool):
+            result[key] = item
+        elif isinstance(item, (int, float)) and math.isfinite(item):
+            result[key] = item
+        elif isinstance(item, str) and len(item) <= 256:
+            result[key] = item
+    return result or None
 
 
 def _first_optional_string(data: dict[str, Any], *keys: str) -> str | None:
@@ -424,6 +450,14 @@ class WhiskerApiClient:
         data = await self._request("GET", endpoint)
 
         return self._parse_user_data(data)
+
+    async def get_user_conditions(self) -> dict[str, Any] | None:
+        """Get the lightweight conditions snapshot used by Ting 3.0.4."""
+        if not self._user_id:
+            await self._ensure_token()
+        endpoint = API_USER_CONDITIONS_ENDPOINT.format(user_id=self._user_id)
+        data = await self._get_optional_data(endpoint)
+        return data if isinstance(data, dict) else None
 
     async def get_frozen_pipe_data(self, serial_number: str) -> FrozenPipeData:
         """Get optional detailed frozen-pipe status and current history."""
@@ -665,7 +699,42 @@ class WhiskerApiClient:
     async def get_all_device_states(self) -> dict[str, DeviceState]:
         """Get the state of all devices."""
         user_data = await self.get_user_data()
-        return {device.serial_number: device for device in user_data.devices}
+        devices = {device.serial_number: device for device in user_data.devices}
+        conditions = await self.get_user_conditions()
+        if conditions is None:
+            return devices
+
+        temperatures = _mapping(conditions.get("currentTemperatures"))
+        outage_risks = _mapping(conditions.get("currentOutageRisks"))
+        for device in devices.values():
+            site_key = str(device.site_id)
+            device.current_temperature_c = _optional_number(temperatures.get(site_key))
+            risk = outage_risks.get(site_key)
+            device.current_outage_risk = (
+                risk
+                if isinstance(risk, (str, int, float)) and not isinstance(risk, bool)
+                else _bounded_scalar_mapping(risk)
+            )
+
+        # The conditions response also carries fresher copies of device status.
+        for value in _collection(conditions.get("devices")):
+            if not isinstance(value, dict):
+                continue
+            serial_number = _optional_string(value.get("serialNumber"))
+            device = devices.get(serial_number or "")
+            if device is None:
+                continue
+            if "isFire" in value:
+                device.is_fire = _boolean(value.get("isFire"))
+            if "isHvacVerified" in value:
+                device.is_hvac_verified = _boolean(value.get("isHvacVerified"))
+            if "hasFrozenPipe" in value:
+                device.has_frozen_pipe = _boolean(value.get("hasFrozenPipe"))
+            if isinstance(value.get("fireHazardStatus"), dict):
+                device.fire_hazard_status = self._parse_device(
+                    value, serial_number
+                ).fire_hazard_status
+        return devices
 
     async def test_connection(self) -> bool:
         """Test the connection to the API."""

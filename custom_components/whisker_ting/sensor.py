@@ -16,7 +16,9 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     EntityCategory,
+    PERCENTAGE,
     UnitOfElectricPotential,
+    UnitOfFrequency,
     UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant
@@ -88,6 +90,41 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
             else None
         ),
     ),
+    WhiskerSensorEntityDescription(
+        key="frequency",
+        translation_key="frequency",
+        device_class=SensorDeviceClass.FREQUENCY,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfFrequency.HERTZ,
+        suggested_display_precision=2,
+        value_fn=lambda state: state.voltage.frequency_hz,
+    ),
+    WhiskerSensorEntityDescription(
+        key="thd_min",
+        translation_key="thd_min",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=PERCENTAGE,
+        suggested_display_precision=2,
+        entity_registry_enabled_default=False,
+        value_fn=lambda state: state.voltage.thd_min_percent,
+    ),
+    WhiskerSensorEntityDescription(
+        key="thd_average",
+        translation_key="thd_average",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=PERCENTAGE,
+        suggested_display_precision=2,
+        value_fn=lambda state: state.voltage.thd_avg_percent,
+    ),
+    WhiskerSensorEntityDescription(
+        key="thd_max",
+        translation_key="thd_max",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=PERCENTAGE,
+        suggested_display_precision=2,
+        entity_registry_enabled_default=False,
+        value_fn=lambda state: state.voltage.thd_max_percent,
+    ),
     # Primary status sensors (enabled by default)
     WhiskerSensorEntityDescription(
         key="hazard_status",
@@ -157,6 +194,23 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
             if state.frozen_pipe.status
             else None
         ),
+    ),
+    WhiskerSensorEntityDescription(
+        key="current_outdoor_temperature",
+        translation_key="current_outdoor_temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        suggested_display_precision=1,
+        value_fn=lambda state: state.current_temperature_c,
+    ),
+    WhiskerSensorEntityDescription(
+        key="current_outage_risk",
+        translation_key="current_outage_risk",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda state: _get_outage_risk_state(state),
+        attributes_fn=lambda state: _get_outage_risk_attributes(state),
     ),
     WhiskerSensorEntityDescription(
         key="frozen_pipe_detected_location",
@@ -247,7 +301,38 @@ REALTIME_SENSOR_KEYS = {
     "voltage_high",
     "voltage_low",
     "average_peaks_max",
+    "frequency",
+    "thd_min",
+    "thd_average",
+    "thd_max",
 }
+
+
+def _get_outage_risk_state(state: DeviceState) -> str | int | float | None:
+    """Return a stable state from Ting's opaque per-site outage-risk value."""
+    risk = state.current_outage_risk
+    if isinstance(risk, (str, int, float)) and not isinstance(risk, bool):
+        return risk
+    if isinstance(risk, dict):
+        for key in ("status", "risk", "level"):
+            value = risk.get(key)
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                return value
+    return None
+
+
+def _get_outage_risk_attributes(state: DeviceState) -> dict[str, Any] | None:
+    """Expose the documented-shape outage-risk fields as attributes."""
+    risk = state.current_outage_risk
+    if not isinstance(risk, dict):
+        return None
+    return {
+        key: value
+        for key, value in risk.items()
+        if isinstance(key, str)
+        and isinstance(value, (str, int, float, bool))
+        and len(key) <= 64
+    }
 
 
 def _get_frozen_pipe_last_event(state: DeviceState) -> datetime | None:

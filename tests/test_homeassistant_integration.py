@@ -144,8 +144,11 @@ def test_only_realtime_entities_become_unavailable_on_stream_loss() -> None:
     coordinator.data = {device.serial_number: device}
     coordinator.is_realtime_available.return_value = False
 
-    voltage = WhiskerSensor(coordinator, device.serial_number, SENSOR_DESCRIPTIONS[0])
-    hazard = WhiskerSensor(coordinator, device.serial_number, SENSOR_DESCRIPTIONS[4])
+    descriptions = {item.key: item for item in SENSOR_DESCRIPTIONS}
+    voltage = WhiskerSensor(coordinator, device.serial_number, descriptions["voltage"])
+    hazard = WhiskerSensor(
+        coordinator, device.serial_number, descriptions["hazard_status"]
+    )
 
     assert voltage.native_value == 120.0
     assert not voltage.available
