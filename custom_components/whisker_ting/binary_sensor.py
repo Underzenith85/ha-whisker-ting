@@ -97,7 +97,7 @@ async def async_setup_entry(
     coordinator = entry.runtime_data
 
     entities: list[WhiskerBinarySensor] = []
-    for device_id, device_state in coordinator.data.items():
+    for device_id in coordinator.data:
         for description in BINARY_SENSOR_DESCRIPTIONS:
             entities.append(
                 WhiskerBinarySensor(

@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -29,8 +28,8 @@ from custom_components.whisker_ting.const import (
     CONF_API_KEY,
     CONF_PASSWORD,
     CONF_REFRESH_TOKEN,
-    CONF_USERNAME,
     CONF_USER_ID,
+    CONF_USERNAME,
     DOMAIN,
 )
 from custom_components.whisker_ting.coordinator import (

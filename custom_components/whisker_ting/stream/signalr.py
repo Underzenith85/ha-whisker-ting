@@ -57,15 +57,12 @@ def decode_handshake_response(data: str | bytes) -> str | bytes | None:
     requests a binary transfer format, and Ting responds with binary ``{}\x1e``.
     A server may append the first hub message after the record separator.
     """
-    separator: str | bytes
     if isinstance(data, bytes):
-        separator = RECORD_SEPARATOR.encode()
+        separator_index = data.find(RECORD_SEPARATOR.encode())
     elif isinstance(data, str):
-        separator = RECORD_SEPARATOR
+        separator_index = data.find(RECORD_SEPARATOR)
     else:
         raise SignalRHandshakeError("SignalR handshake has an invalid type")
-
-    separator_index = data.find(separator)
     if separator_index < 0:
         raise SignalRHandshakeError(
             "SignalR handshake is not record-separator terminated"

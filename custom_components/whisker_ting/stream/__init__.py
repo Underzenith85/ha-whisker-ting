@@ -11,8 +11,8 @@ from .models import (
 )
 
 __all__ = [
-    "PowerQualityData",
     "PowerQualityCategory",
+    "PowerQualityData",
     "SignalRInvocationError",
     "StationState",
     "StreamHealth",

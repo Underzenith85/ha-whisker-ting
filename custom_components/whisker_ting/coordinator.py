@@ -7,7 +7,6 @@ import logging
 from datetime import timedelta
 
 import aiohttp
-
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -122,7 +121,7 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
             return
 
         # Find the device with this station_id
-        for device_id, device_state in self.data.items():
+        for device_state in self.data.values():
             if device_state.station_id == station_id:
                 # Update the voltage reading
                 device_state.voltage = device_state.voltage.with_voltage(

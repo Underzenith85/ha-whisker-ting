@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from pathlib import Path
@@ -45,3 +46,52 @@ def test_english_translation_matches_source_strings() -> None:
     assert _load_json(INTEGRATION / "translations" / "en.json") == _load_json(
         INTEGRATION / "strings.json"
     )
+
+
+def _imports(path: Path) -> set[str]:
+    """Return imports found in one Python source file."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    imports: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imports.add(node.module)
+    return imports
+
+
+def test_final_package_layout_has_no_legacy_monoliths() -> None:
+    """Structural refactors cannot silently regress to root-level monoliths."""
+    for legacy in ("api.py", "auth.py", "signalr.py", "websocket.py"):
+        assert not (INTEGRATION / legacy).exists()
+    for package in ("api", "auth", "stream"):
+        assert (INTEGRATION / package / "__init__.py").is_file()
+
+
+def test_generic_protocol_modules_have_no_home_assistant_dependencies() -> None:
+    """Pure SRP and SignalR helpers remain reusable and side-effect free."""
+    forbidden = {
+        "homeassistant",
+        "custom_components.whisker_ting.binary_sensor",
+        "custom_components.whisker_ting.coordinator",
+        "custom_components.whisker_ting.entity",
+        "custom_components.whisker_ting.sensor",
+    }
+    for relative_path in ("auth/srp.py", "stream/signalr.py"):
+        imports = _imports(INTEGRATION / relative_path)
+        assert not any(
+            imported == name or imported.startswith(f"{name}.")
+            for imported in imports
+            for name in forbidden
+        )
+
+
+def test_domain_packages_do_not_import_entity_platforms() -> None:
+    """API, auth, and stream packages cannot depend on HA entity layers."""
+    forbidden_parts = {"binary_sensor", "coordinator", "entity", "sensor"}
+    for package in ("api", "auth", "stream"):
+        for path in (INTEGRATION / package).glob("*.py"):
+            assert not any(
+                imported.rsplit(".", maxsplit=1)[-1] in forbidden_parts
+                for imported in _imports(path)
+            ), path

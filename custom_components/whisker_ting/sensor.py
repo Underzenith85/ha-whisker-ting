@@ -15,8 +15,8 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
-    EntityCategory,
     PERCENTAGE,
+    EntityCategory,
     UnitOfElectricPotential,
     UnitOfFrequency,
     UnitOfTemperature,
@@ -411,7 +411,7 @@ async def async_setup_entry(
     coordinator = entry.runtime_data
 
     entities: list[WhiskerSensor] = []
-    for device_id, device_state in coordinator.data.items():
+    for device_id in coordinator.data:
         for description in SENSOR_DESCRIPTIONS:
             entities.append(
                 WhiskerSensor(

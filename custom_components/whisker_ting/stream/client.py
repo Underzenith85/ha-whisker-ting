@@ -405,7 +405,7 @@ class WhiskerWebSocket:
         try:
             await asyncio.wait_for(self._first_data_received.wait(), timeout=timeout)
             return True
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _LOGGER.debug("Timeout waiting for first voltage data")
             return False
 
@@ -445,7 +445,7 @@ class WhiskerWebSocket:
                         self._transition_disconnected(f"transport closed ({msg.type})")
                         break
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     _LOGGER.debug("WebSocket receive timeout, continuing...")
                 except asyncio.CancelledError:
                     break
