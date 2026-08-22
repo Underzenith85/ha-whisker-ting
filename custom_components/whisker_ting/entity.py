@@ -6,7 +6,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityDescription
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import DeviceState
+from .api import DeviceState, Site
 from .const import DOMAIN
 from .coordinator import WhiskerDataUpdateCoordinator
 
@@ -44,6 +44,11 @@ class WhiskerEntity(CoordinatorEntity[WhiskerDataUpdateCoordinator]):
                 manufacturer="Whisker Labs",
                 model="Ting Fire Sensor",
                 sw_version=device_state.version,
+                via_device=(
+                    (DOMAIN, f"site_{device_state.site_id}")
+                    if device_state.site_id in self.coordinator.sites
+                    else None
+                ),
             )
         return DeviceInfo(
             identifiers={(DOMAIN, self._device_id)},
@@ -55,3 +60,44 @@ class WhiskerEntity(CoordinatorEntity[WhiskerDataUpdateCoordinator]):
     def available(self) -> bool:
         """Return whether coordinator and device data are available."""
         return super().available and self.device_state is not None
+
+
+class WhiskerSiteEntity(CoordinatorEntity[WhiskerDataUpdateCoordinator]):
+    """Base class for entities backed by one Ting site."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: WhiskerDataUpdateCoordinator,
+        site_id: int,
+        description: EntityDescription,
+    ) -> None:
+        """Initialize common coordinator and site state."""
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._site_id = site_id
+        self._attr_unique_id = f"site_{site_id}_{description.key}"
+
+    @property
+    def site_state(self) -> Site | None:
+        """Return the current validated state for this entity's site."""
+        return self.coordinator.sites.get(self._site_id)
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return stable, address-safe registry information for this Ting site."""
+        site = self.site_state
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"site_{self._site_id}")},
+            name=site.display_name
+            if site and site.display_name
+            else str(self._site_id),
+            manufacturer="Whisker Labs",
+            model="Ting Site",
+        )
+
+    @property
+    def available(self) -> bool:
+        """Return whether coordinator and site data are available."""
+        return super().available and self.site_state is not None

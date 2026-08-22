@@ -102,7 +102,9 @@ async def test_applies_3_0_4_conditions_by_site_and_device() -> None:
         site_id=100,
     )
     client.get_user_data = AsyncMock(
-        return_value=api.UserData(42, "", "", "", devices=[device])
+        return_value=api.UserData(
+            42, "", "", "", devices=[device], sites=[api.Site(100, 42, "Home")]
+        )
     )
     client.get_user_conditions = AsyncMock(
         return_value=parsers.parse_conditions(
@@ -127,11 +129,12 @@ async def test_applies_3_0_4_conditions_by_site_and_device() -> None:
     )
 
     result = (await client.get_all_device_states())["SERIAL-001"]
+    site = client.sites[100]
 
     assert result.is_fire
     assert result.has_frozen_pipe
-    assert result.current_temperature_c == -3.5
-    assert result.current_outage_risk == {"status": "elevated", "level": 2}
+    assert site.current_temperature_c == -3.5
+    assert site.current_outage_risk == {"status": "elevated", "level": 2}
 
 
 def test_non_finite_coordinates_are_discarded() -> None:

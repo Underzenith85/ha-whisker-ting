@@ -22,11 +22,13 @@ from homeassistant.const import (
     UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .api import DeviceState
+from .api import DeviceState, Site
+from .const import DOMAIN
 from .coordinator import WhiskerDataUpdateCoordinator
-from .entity import WhiskerEntity
+from .entity import WhiskerEntity, WhiskerSiteEntity
 
 PARALLEL_UPDATES = 0  # Coordinator handles all updates
 
@@ -37,6 +39,37 @@ class WhiskerSensorEntityDescription(SensorEntityDescription):
 
     value_fn: Callable[[DeviceState], Any]
     attributes_fn: Callable[[DeviceState], dict[str, Any] | None] | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class WhiskerSiteSensorEntityDescription(SensorEntityDescription):
+    """Describe a Whisker Ting site sensor entity."""
+
+    value_fn: Callable[[Site], Any]
+    attributes_fn: Callable[[Site], dict[str, Any] | None] | None = None
+
+
+SITE_SENSOR_DESCRIPTIONS: tuple[WhiskerSiteSensorEntityDescription, ...] = (
+    WhiskerSiteSensorEntityDescription(
+        key="current_outdoor_temperature",
+        translation_key="current_outdoor_temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        suggested_display_precision=1,
+        value_fn=lambda site: site.current_temperature_c,
+    ),
+    WhiskerSiteSensorEntityDescription(
+        key="current_outage_risk",
+        translation_key="current_outage_risk",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda site: _get_outage_risk_state(site.current_outage_risk),
+        attributes_fn=lambda site: _get_outage_risk_attributes(
+            site.current_outage_risk
+        ),
+    ),
+)
 
 
 SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
@@ -194,23 +227,6 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
         ),
     ),
     WhiskerSensorEntityDescription(
-        key="current_outdoor_temperature",
-        translation_key="current_outdoor_temperature",
-        device_class=SensorDeviceClass.TEMPERATURE,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        suggested_display_precision=1,
-        value_fn=lambda state: state.current_temperature_c,
-    ),
-    WhiskerSensorEntityDescription(
-        key="current_outage_risk",
-        translation_key="current_outage_risk",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
-        value_fn=lambda state: _get_outage_risk_state(state),
-        attributes_fn=lambda state: _get_outage_risk_attributes(state),
-    ),
-    WhiskerSensorEntityDescription(
         key="frozen_pipe_detected_location",
         translation_key="frozen_pipe_detected_location",
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -306,9 +322,10 @@ REALTIME_SENSOR_KEYS = {
 }
 
 
-def _get_outage_risk_state(state: DeviceState) -> str | int | float | None:
+def _get_outage_risk_state(
+    risk: str | int | float | dict[str, str | int | float | bool] | None,
+) -> str | int | float | None:
     """Return a stable state from Ting's opaque per-site outage-risk value."""
-    risk = state.current_outage_risk
     if isinstance(risk, (str, int, float)) and not isinstance(risk, bool):
         return risk
     if isinstance(risk, dict):
@@ -319,9 +336,10 @@ def _get_outage_risk_state(state: DeviceState) -> str | int | float | None:
     return None
 
 
-def _get_outage_risk_attributes(state: DeviceState) -> dict[str, Any] | None:
+def _get_outage_risk_attributes(
+    risk: str | int | float | dict[str, str | int | float | bool] | None,
+) -> dict[str, Any] | None:
     """Expose the documented-shape outage-risk fields as attributes."""
-    risk = state.current_outage_risk
     if not isinstance(risk, dict):
         return None
     return {
@@ -409,8 +427,9 @@ async def async_setup_entry(
 ) -> None:
     """Set up Whisker Ting sensors from a config entry."""
     coordinator = entry.runtime_data
+    _migrate_site_entities(hass, coordinator)
 
-    entities: list[WhiskerSensor] = []
+    entities: list[WhiskerSensor | WhiskerSiteSensor] = []
     for device_id in coordinator.data:
         for description in SENSOR_DESCRIPTIONS:
             entities.append(
@@ -421,7 +440,59 @@ async def async_setup_entry(
                 )
             )
 
+    for site_id in coordinator.sites:
+        for description in SITE_SENSOR_DESCRIPTIONS:
+            entities.append(
+                WhiskerSiteSensor(
+                    coordinator=coordinator,
+                    site_id=site_id,
+                    description=description,
+                )
+            )
+
     async_add_entities(entities)
+
+
+def _migrate_site_entities(
+    hass: HomeAssistant, coordinator: WhiskerDataUpdateCoordinator
+) -> None:
+    """Move one legacy per-device site entity and remove site duplicates."""
+    registry = er.async_get(hass)
+    devices_by_site: dict[int, list[str]] = {}
+    for device in coordinator.data.values():
+        devices_by_site.setdefault(device.site_id, []).append(device.serial_number)
+
+    for site_id in coordinator.sites:
+        for description in SITE_SENSOR_DESCRIPTIONS:
+            new_unique_id = f"site_{site_id}_{description.key}"
+            if registry.async_get_entity_id("sensor", DOMAIN, new_unique_id):
+                retained_entity_id = None
+            else:
+                retained_entity_id = next(
+                    (
+                        entity_id
+                        for serial_number in sorted(devices_by_site.get(site_id, []))
+                        if (
+                            entity_id := registry.async_get_entity_id(
+                                "sensor",
+                                DOMAIN,
+                                f"{serial_number}_{description.key}",
+                            )
+                        )
+                    ),
+                    None,
+                )
+                if retained_entity_id:
+                    registry.async_update_entity(
+                        retained_entity_id, new_unique_id=new_unique_id
+                    )
+
+            for serial_number in devices_by_site.get(site_id, []):
+                entity_id = registry.async_get_entity_id(
+                    "sensor", DOMAIN, f"{serial_number}_{description.key}"
+                )
+                if entity_id and entity_id != retained_entity_id:
+                    registry.async_remove(entity_id)
 
 
 class WhiskerSensor(WhiskerEntity, SensorEntity):
@@ -463,3 +534,32 @@ class WhiskerSensor(WhiskerEntity, SensorEntity):
         if device_state is None or self.entity_description.attributes_fn is None:
             return None
         return self.entity_description.attributes_fn(device_state)
+
+
+class WhiskerSiteSensor(WhiskerSiteEntity, SensorEntity):
+    """Represent one site-scoped Ting condition."""
+
+    entity_description: WhiskerSiteSensorEntityDescription
+
+    def __init__(
+        self,
+        coordinator: WhiskerDataUpdateCoordinator,
+        site_id: int,
+        description: WhiskerSiteSensorEntityDescription,
+    ) -> None:
+        """Initialize the site sensor."""
+        super().__init__(coordinator, site_id, description)
+
+    @property
+    def native_value(self) -> Any:
+        """Return the current site-scoped value."""
+        site = self.site_state
+        return self.entity_description.value_fn(site) if site else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return optional modeled attributes for this site condition."""
+        site = self.site_state
+        if site is None or self.entity_description.attributes_fn is None:
+            return None
+        return self.entity_description.attributes_fn(site)

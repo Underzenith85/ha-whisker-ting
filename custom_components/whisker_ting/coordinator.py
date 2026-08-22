@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import (
     DeviceState,
+    Site,
     WhiskerApiClient,
     WhiskerApiError,
     WhiskerAuthError,
@@ -54,6 +55,7 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
         self._ws_manager: WhiskerWebSocketManager | None = None
         self._last_stream_listener_update = 0.0
         self._stream_update_handle: asyncio.TimerHandle | None = None
+        self.sites: dict[int, Site] = {}
 
     @callback
     def _schedule_stream_listener_update(self) -> None:
@@ -213,6 +215,8 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
         """Fetch data from the API."""
         try:
             data = await self.client.get_all_device_states()
+            client_sites = getattr(self.client, "sites", None)
+            self.sites = dict(client_sites) if isinstance(client_sites, dict) else {}
 
             events = await self.client.get_event_history()
             for event in events:
