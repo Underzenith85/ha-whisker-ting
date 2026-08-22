@@ -54,8 +54,7 @@ def hash_sha256(buf: bytes) -> str:
     """Hash using SHA256 and return zero-padded hex string."""
     # Cognito SRP-6a mandates SHA-256 as a protocol primitive; this is not local
     # password storage and cannot be substituted with a password KDF.
-    # codeql[py/weak-sensitive-data-hashing]
-    value = hashlib.sha256(buf).hexdigest()
+    value = hashlib.sha256(buf).hexdigest()  # lgtm[py/weak-sensitive-data-hashing]
     return (64 - len(value)) * "0" + value
 
 
