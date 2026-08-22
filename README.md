@@ -198,6 +198,10 @@ python -m compileall -q custom_components tests
 
 Tests must mock Ting and Cognito traffic. Never commit account credentials, tokens, device identifiers, or unsanitized API responses.
 
+The integration keeps REST transport, errors, validated models, and untrusted-response
+parsing in `custom_components/whisker_ting/api/`. Parser-focused tests live in
+`tests/api/`; sanitized response fixtures remain in `tests/fixtures/`.
+
 ## Support
 
 Report integration problems through the [issue tracker](https://github.com/Underzenith85/ha-whisker-ting/issues).

@@ -11,9 +11,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from custom_components.whisker_ting import api
+from custom_components.whisker_ting.api import parsers
 
-ROOT = Path(__file__).parents[1]
-FIXTURES = Path(__file__).parent / "fixtures"
+ROOT = Path(__file__).parents[2]
+FIXTURES = ROOT / "tests" / "fixtures"
 
 
 def _fixture(name: str) -> Any:
@@ -30,7 +31,7 @@ def _client() -> Any:
 
 def test_parses_normal_learning_efh_ufh_and_multiple_records() -> None:
     """All core hazard states and multiple devices/sites parse deterministically."""
-    result = _client()._parse_user_data(_fixture("user_data_hazards.json"))
+    result = parsers.parse_user_data(_fixture("user_data_hazards.json"))
 
     assert result.user_id == 42
     assert len(result.devices) == 4
@@ -52,7 +53,7 @@ def test_missing_and_null_nested_fields_use_safe_defaults(
 ) -> None:
     """Null containers cannot crash parsing or leak malformed records to state."""
     caplog.set_level(logging.WARNING)
-    result = _client()._parse_user_data(_fixture("user_data_missing_null.json"))
+    result = parsers.parse_user_data(_fixture("user_data_missing_null.json"))
 
     assert [device.serial_number for device in result.devices] == [
         "NULLS-001",
@@ -76,7 +77,7 @@ def test_missing_and_null_nested_fields_use_safe_defaults(
 def test_parser_does_not_retain_raw_response() -> None:
     """Device state contains modeled values only, never the response object."""
     source = _fixture("user_data_hazards.json")
-    device = _client()._parse_user_data(source).devices[0]
+    device = parsers.parse_user_data(source).devices[0]
 
     assert not hasattr(device, "raw_data")
     assert source["devices"][0] not in vars(device).values()
@@ -84,7 +85,7 @@ def test_parser_does_not_retain_raw_response() -> None:
 
 def test_malformed_top_level_collections_are_empty() -> None:
     """Non-list collection values produce deterministic empty collections."""
-    result = _client()._parse_user_data({"id": 42, "devices": None, "sites": {}})
+    result = parsers.parse_user_data({"id": 42, "devices": None, "sites": {}})
 
     assert result.devices == []
     assert result.sites == []
@@ -104,23 +105,25 @@ async def test_applies_3_0_4_conditions_by_site_and_device() -> None:
         return_value=api.UserData(42, "", "", "", devices=[device])
     )
     client.get_user_conditions = AsyncMock(
-        return_value={
-            "devices": [
-                {
-                    "serialNumber": "SERIAL-001",
-                    "isFire": True,
-                    "hasFrozenPipe": True,
-                }
-            ],
-            "currentTemperatures": {"100": -3.5},
-            "currentOutageRisks": {
-                "100": {
-                    "status": "elevated",
-                    "level": 2,
-                    "nested": {"must": "not be retained"},
-                }
-            },
-        }
+        return_value=parsers.parse_conditions(
+            {
+                "devices": [
+                    {
+                        "serialNumber": "SERIAL-001",
+                        "isFire": True,
+                        "hasFrozenPipe": True,
+                    }
+                ],
+                "currentTemperatures": {"100": -3.5},
+                "currentOutageRisks": {
+                    "100": {
+                        "status": "elevated",
+                        "level": 2,
+                        "nested": {"must": "not be retained"},
+                    }
+                },
+            }
+        )
     )
 
     result = (await client.get_all_device_states())["SERIAL-001"]
@@ -133,7 +136,7 @@ async def test_applies_3_0_4_conditions_by_site_and_device() -> None:
 
 def test_non_finite_coordinates_are_discarded() -> None:
     """NaN and infinity cannot be retained as site coordinates."""
-    result = _client()._parse_user_data(
+    result = parsers.parse_user_data(
         {
             "sites": [
                 {
@@ -151,11 +154,10 @@ def test_non_finite_coordinates_are_discarded() -> None:
 
 def test_parses_frozen_pipe_status_and_history_without_raw_data() -> None:
     """Known frozen-pipe fields parse while unknown fields are discarded."""
-    client = _client()
-    status = client._parse_frozen_pipe_record(
+    status = parsers.parse_frozen_pipe_record(
         _fixture("frozen_pipe_status_active.json")
     )
-    history = client._parse_frozen_pipe_history(_fixture("frozen_pipe_history.json"))
+    history = parsers.parse_frozen_pipe_history(_fixture("frozen_pipe_history.json"))
 
     assert status is not None
     assert status.level == 55
@@ -171,13 +173,11 @@ def test_parses_frozen_pipe_status_and_history_without_raw_data() -> None:
 
 def test_frozen_pipe_parser_handles_empty_and_malformed_responses() -> None:
     """Optional malformed responses produce safe empty models."""
-    client = _client()
-
-    assert client._parse_frozen_pipe_record(None) is None
-    assert client._parse_frozen_pipe_record([]) is None
-    assert client._parse_frozen_pipe_record({"unexpected": "value"}) is None
-    assert client._parse_frozen_pipe_history(None) == []
-    assert client._parse_frozen_pipe_history({"history": [None, "bad"]}) == []
+    assert parsers.parse_frozen_pipe_record(None) is None
+    assert parsers.parse_frozen_pipe_record([]) is None
+    assert parsers.parse_frozen_pipe_record({"unexpected": "value"}) is None
+    assert parsers.parse_frozen_pipe_history(None) == []
+    assert parsers.parse_frozen_pipe_history({"history": [None, "bad"]}) == []
 
 
 @pytest.mark.asyncio
@@ -216,7 +216,7 @@ async def test_optional_endpoint_failure_returns_empty_data() -> None:
 
 def test_event_history_is_scoped_normalized_and_sorted() -> None:
     """Unknown event types survive while malformed and unscoped data is omitted."""
-    events = _client()._parse_event_history(_fixture("notification_history.json"))
+    events = parsers.parse_event_history(_fixture("notification_history.json"))
 
     assert [event.event_id for event in events] == [
         "event-new",

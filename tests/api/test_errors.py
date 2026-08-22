@@ -1,4 +1,4 @@
-"""Offline tests for REST API error classification and retry behavior."""
+"""Offline tests for REST client error classification and retry behavior."""
 
 from __future__ import annotations
 
