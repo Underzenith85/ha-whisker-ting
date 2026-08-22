@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import struct
+import math
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Callable
+from datetime import UTC, datetime
+from typing import Any
 
 import aiohttp
-import msgpack
 
 from .const import SIGNALR_URL
+from .signalr import (
+    SignalRProtocolError,
+    encode_invocation,
+    encode_ping,
+    extract_invocation_payloads,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -78,84 +84,66 @@ class WhiskerWebSocket:
     def _encode_invocation(self, method: str, args: list) -> bytes:
         """Encode a SignalR invocation message."""
         self._message_id += 1
-        # SignalR MessagePack invocation format:
-        # {1: [type, headers, invocationId, target, arguments]}
-        # Type 1 = INVOCATION (not streaming)
-        message = {
-            1: [
-                MSG_TYPE_INVOCATION,
-                {},  # headers
-                str(self._message_id),  # invocationId
-                method,
-                args,
-            ]
-        }
-        return msgpack.packb(message, use_bin_type=True)
+        return encode_invocation(str(self._message_id), method, args)
 
     def _encode_ping(self) -> bytes:
         """Encode a SignalR ping message."""
-        # Ping is just {1: [6]}
-        return msgpack.packb({1: [MSG_TYPE_PING]}, use_bin_type=True)
+        return encode_ping()
 
-    def _decode_voltage_data(self, data: bytes) -> VoltageData | None:
-        """Decode voltage data from MessagePack message."""
+    @staticmethod
+    def _parse_timestamp(value: Any) -> datetime:
+        """Parse the timestamp representation used by the Ting stream."""
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                return timestamp.replace(tzinfo=timestamp.tzinfo or UTC)
+            except ValueError:
+                pass
+        return datetime.now(UTC)
+
+    def _decode_voltage_data(self, data: bytes) -> list[VoltageData]:
+        """Decode voltage readings from SignalR MessagePack messages."""
         try:
-            # Find double values in the message (0xcb prefix)
-            doubles = []
-            pos = 0
-            while pos < len(data):
-                if data[pos] == 0xCB:  # float64 marker
-                    val = struct.unpack(">d", data[pos + 1 : pos + 9])[0]
-                    doubles.append(val)
-                    pos += 9
-                else:
-                    pos += 1
+            payloads = extract_invocation_payloads(data, "updateComboBinaryData")
+        except SignalRProtocolError as err:
+            _LOGGER.debug("Error decoding SignalR voltage frame: %s", err)
+            return []
 
-            if len(doubles) >= 4:
-                voltage = doubles[0]
-                peaks = doubles[1]
-                voltage_hi = doubles[2]
-                voltage_lo = doubles[3]
+        readings: list[VoltageData] = []
+        for payload in payloads:
+            try:
+                voltage = float(payload["Voltage"])
+                voltage_hi = float(payload["VoltageHi"])
+                voltage_lo = float(payload["VoltageLo"])
+                peaks = float(payload["AveragePeaksMax"])
 
-                # Filter out obviously bad readings
-                # Only discard zero/near-zero or clearly garbage values
+                if not all(
+                    math.isfinite(value)
+                    for value in (voltage, voltage_hi, voltage_lo, peaks)
+                ):
+                    raise ValueError("non-finite voltage value")
+
                 if abs(voltage) < 1 or abs(voltage) > 1000:
                     _LOGGER.debug(
                         "Discarding anomalous voltage reading: %.2fV", voltage
                     )
-                    return None
+                    continue
 
-                # Find timestamp (uint64 with 0xd7 or 0xcf prefix)
-                timestamp = datetime.now()  # Default to now
-                pos = 0
-                while pos < len(data) - 8:
-                    if data[pos] == 0xD7:  # ext8 with type -1 (timestamp)
-                        pos += 1
-                        if data[pos] == 0xFF:  # timestamp type
-                            pos += 1
-                            ts_val = struct.unpack(">Q", data[pos : pos + 8])[0]
-                            # SignalR uses .NET ticks (100ns since 1/1/0001)
-                            # Convert to Unix timestamp
-                            try:
-                                timestamp = datetime.fromtimestamp(ts_val / 10000000 - 62135596800)
-                            except (ValueError, OSError):
-                                pass
-                            break
-                        pos += 7
-                    else:
-                        pos += 1
-
-                return VoltageData(
-                    timestamp=timestamp,
-                    voltage=voltage,
-                    average_peaks_max=peaks,
-                    voltage_hi=voltage_hi,
-                    voltage_lo=voltage_lo,
+                readings.append(
+                    VoltageData(
+                        timestamp=self._parse_timestamp(payload.get("DataTimeUtc")),
+                        voltage=voltage,
+                        average_peaks_max=peaks,
+                        voltage_hi=voltage_hi,
+                        voltage_lo=voltage_lo,
+                    )
                 )
-        except Exception as err:
-            _LOGGER.debug("Error decoding voltage data: %s", err)
+            except (KeyError, TypeError, ValueError) as err:
+                _LOGGER.debug("Discarding invalid voltage payload: %s", err)
 
-        return None
+        return readings
 
     async def connect(self) -> bool:
         """Connect to the SignalR hub."""
@@ -190,7 +178,7 @@ class WhiskerWebSocket:
             await self._ws.send_bytes(init_msg)
 
             self._connected = True
-            self._last_data_time = datetime.now()
+            self._last_data_time = datetime.now(UTC)
 
             # Start background tasks
             self._receive_task = asyncio.create_task(self._receive_loop())
@@ -250,17 +238,13 @@ class WhiskerWebSocket:
                 )
 
                 if msg.type == aiohttp.WSMsgType.BINARY:
-                    # Check if it's a voltage update
-                    if b"updateComboBinaryData" in msg.data:
-                        voltage_data = self._decode_voltage_data(msg.data)
-                        if voltage_data and self._on_voltage_update:
-                            self._last_data_time = datetime.now()
+                    for voltage_data in self._decode_voltage_data(msg.data):
+                        if self._on_voltage_update:
+                            self._last_data_time = datetime.now(UTC)
                             self._on_voltage_update(self._station_id, voltage_data)
                             # Signal that we've received data
                             if not self._first_data_received.is_set():
                                 self._first_data_received.set()
-                    elif msg.data == b"\x02\x91\x06":  # Ping response
-                        _LOGGER.debug("Received ping response")
 
                 elif msg.type == aiohttp.WSMsgType.TEXT:
                     _LOGGER.debug("Received text message: %s", msg.data)
@@ -297,7 +281,9 @@ class WhiskerWebSocket:
                     break
 
                 if self._last_data_time:
-                    time_since_update = (datetime.now() - self._last_data_time).total_seconds()
+                    time_since_update = (
+                        datetime.now(UTC) - self._last_data_time
+                    ).total_seconds()
                     if time_since_update > self.STALE_DATA_THRESHOLD:
                         _LOGGER.error(
                             "WebSocket data stale for station %s (no update in %.0f seconds), reconnecting",
