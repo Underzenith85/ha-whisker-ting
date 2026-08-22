@@ -12,6 +12,7 @@ API_BASE_URL = "https://api.wskr.io"
 API_USERS_ENDPOINT = "/api/v1/Users/{user_id}"
 API_FROZEN_PIPE_STATUS_ENDPOINT = "/api/v1/FrozenPipe/{serial_number}"
 API_FROZEN_PIPE_HISTORY_ENDPOINT = "/api/v1/FrozenPipe/{serial_number}/currentHistory"
+API_NOTIFICATION_HISTORY_ENDPOINT = "/api/v1/Notifications/history/{user_id}"
 
 # SignalR WebSocket
 SIGNALR_URL = "wss://signalr.api.wskr.io/dataHub"

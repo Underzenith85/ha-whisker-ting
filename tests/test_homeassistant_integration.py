@@ -167,6 +167,7 @@ async def test_coordinator_connects_stream_once_and_disconnects_on_shutdown(
         side_effect=[{device.serial_number: device}, {device.serial_number: device}]
     )
     client.get_frozen_pipe_data = AsyncMock(return_value=FrozenPipeData())
+    client.get_event_history = AsyncMock(return_value=[])
     manager = MagicMock()
     manager.connect_device = AsyncMock(return_value=True)
     manager.wait_for_data = AsyncMock(return_value=False)

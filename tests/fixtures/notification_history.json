@@ -1,0 +1,37 @@
+[
+  {
+    "id": "event-new",
+    "serialNumber": "SERIAL-001",
+    "eventType": "PowerRestored",
+    "eventCategory": "Outage",
+    "eventTimestampUtc": "2026-08-20T18:30:00Z",
+    "title": "Power restored",
+    "message": "Power service has returned.",
+    "statuses": ["private status data"]
+  },
+  {
+    "id": "event-old",
+    "serialNumber": "SERIAL-001",
+    "eventType": "FutureEventType",
+    "eventCategory": "Other",
+    "eventTimestampUtc": "2026-08-19T17:00:00-07:00",
+    "title": "Future event"
+  },
+  {
+    "id": "other-station",
+    "serialNumber": "SERIAL-002",
+    "eventType": "GeneratorOn",
+    "eventTimestampUtc": "2026-08-20T17:00:00Z"
+  },
+  {
+    "id": "unscoped",
+    "eventType": "WeatherAlert",
+    "eventTimestampUtc": "2026-08-20T19:00:00Z"
+  },
+  {
+    "serialNumber": "SERIAL-001",
+    "eventType": "MalformedTime",
+    "eventTimestampUtc": "not-a-time"
+  },
+  "malformed"
+]

@@ -17,6 +17,7 @@ from .const import (
     API_BASE_URL,
     API_FROZEN_PIPE_HISTORY_ENDPOINT,
     API_FROZEN_PIPE_STATUS_ENDPOINT,
+    API_NOTIFICATION_HISTORY_ENDPOINT,
     API_USERS_ENDPOINT,
 )
 
@@ -79,6 +80,19 @@ class FrozenPipeData:
     history: list[FrozenPipeRecord] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class TingEvent:
+    """Normalized read-only Ting notification event."""
+
+    event_type: str
+    timestamp_utc: str
+    serial_number: str
+    event_id: str | None = None
+    category: str | None = None
+    title: str | None = None
+    message: str | None = None
+
+
 @dataclass
 class DeviceState:
     """Represents the state of a Whisker Ting device."""
@@ -110,6 +124,7 @@ class DeviceState:
 
     # Detailed frozen-pipe information (from optional read-only endpoints)
     frozen_pipe: FrozenPipeData = field(default_factory=FrozenPipeData)
+    events: list[TingEvent] = field(default_factory=list)
 
     # Group info
     group_name: str | None = None
@@ -196,6 +211,13 @@ def _identifier(value: Any) -> int | None:
     return value if value is not None and value > 0 else None
 
 
+def _optional_identifier_string(value: Any) -> str | None:
+    """Return a non-empty string or integer identifier as a string."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    return _optional_string(value)
+
+
 def _optional_number(value: Any) -> float | None:
     """Return a finite-style numeric value without accepting booleans."""
     if (
@@ -222,6 +244,18 @@ def _first_optional_string(data: dict[str, Any], *keys: str) -> str | None:
         ),
         None,
     )
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    """Parse an API timestamp and normalize it to UTC."""
+    value = _optional_string(value)
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=parsed.tzinfo or UTC).astimezone(UTC)
 
 
 class WhiskerApiClient:
@@ -408,10 +442,27 @@ class WhiskerApiClient:
             history=self._parse_frozen_pipe_history(history_result),
         )
 
-    async def _get_optional_data(self, endpoint: str) -> Any | None:
+    async def get_event_history(self, days: int = 30) -> list[TingEvent]:
+        """Get a bounded window of read-only notification history."""
+        if not self._user_id:
+            await self._ensure_token()
+        now = datetime.now(UTC)
+        endpoint = API_NOTIFICATION_HISTORY_ENDPOINT.format(user_id=self._user_id)
+        data = await self._get_optional_data(
+            endpoint,
+            params={
+                "sentStartUtc": (now - timedelta(days=days)).isoformat(),
+                "sentEndUtc": now.isoformat(),
+                "excludeStatuses": "true",
+                "excludeCleared": "false",
+            },
+        )
+        return self._parse_event_history(data)
+
+    async def _get_optional_data(self, endpoint: str, **kwargs: Any) -> Any | None:
         """Fetch an optional feature endpoint without failing the main update."""
         try:
-            return await self._request("GET", endpoint)
+            return await self._request("GET", endpoint, **kwargs)
         except WhiskerApiError as err:
             _LOGGER.debug("Optional Ting feature endpoint unavailable: %s", err)
             return None
@@ -463,6 +514,39 @@ class WhiskerApiClient:
             for value in values
             if (record := self._parse_frozen_pipe_record(value)) is not None
         ]
+
+    def _parse_event_history(self, data: Any) -> list[TingEvent]:
+        """Normalize, scope, and deterministically order notification history."""
+        if not isinstance(data, list):
+            return []
+        events: list[TingEvent] = []
+        for value in data:
+            if not isinstance(value, dict):
+                continue
+            event_type = _optional_string(value.get("eventType"))
+            serial_number = _optional_string(value.get("serialNumber"))
+            timestamp_value = _first_optional_string(
+                value,
+                "eventTimestampUtc",
+                "sentTimestampUtc",
+                "sentUtc",
+                "eventTimestampLocal",
+            )
+            timestamp = _parse_datetime(timestamp_value)
+            if event_type is None or serial_number is None or timestamp is None:
+                continue
+            events.append(
+                TingEvent(
+                    event_type=event_type,
+                    timestamp_utc=timestamp.isoformat(),
+                    serial_number=serial_number,
+                    event_id=_optional_identifier_string(value.get("id")),
+                    category=_optional_string(value.get("eventCategory")),
+                    title=_optional_string(value.get("title")),
+                    message=_optional_string(value.get("message")),
+                )
+            )
+        return sorted(events, key=lambda event: event.timestamp_utc, reverse=True)
 
     def _parse_user_data(self, data: dict[str, Any]) -> UserData:
         """Parse user data from API response."""
