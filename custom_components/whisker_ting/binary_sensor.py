@@ -134,8 +134,8 @@ BINARY_SENSOR_DESCRIPTIONS: tuple[WhiskerBinarySensorEntityDescription, ...] = (
             key=key,
             translation_key=key,
             device_class=device_class,
-            value_fn=lambda state, on=on, off=off: _event_condition(
-                state.events, on, off
+            value_fn=lambda state, key=key, on=on, off=off: _device_event_condition(
+                state, key, on, off
             ),
         )
         for key, device_class, on, off in EVENT_CONDITION_DESCRIPTIONS
@@ -174,6 +174,18 @@ def _event_condition(
     if not matches:
         return None
     return max(matches, key=lambda item: item[0])[1]
+
+
+def _device_event_condition(
+    state: DeviceState,
+    key: str,
+    on_kinds: frozenset[str],
+    off_kinds: frozenset[str],
+) -> bool | None:
+    """Prefer an explicit REST connectivity value, then event transitions."""
+    if key == "device_online" and state.is_online is not None:
+        return state.is_online
+    return _event_condition(state.events, on_kinds, off_kinds)
 
 
 async def async_setup_entry(

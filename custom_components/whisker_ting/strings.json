@@ -162,6 +162,34 @@
           "stopped": "Stopped"
         }
       },
+      "rest_health": {
+        "name": "REST API health",
+        "state": {
+          "healthy": "Healthy",
+          "error": "Error"
+        }
+      },
+      "last_rest_update": {
+        "name": "Last successful REST update"
+      },
+      "last_device_observation": {
+        "name": "Last device observation"
+      },
+      "last_realtime_sample": {
+        "name": "Last real-time sample"
+      },
+      "realtime_sample_age": {
+        "name": "Real-time sample age"
+      },
+      "stream_reconnect_count": {
+        "name": "Stream reconnect count"
+      },
+      "last_stream_reconnect": {
+        "name": "Last stream reconnect"
+      },
+      "last_stream_reconnect_reason": {
+        "name": "Last stream reconnect reason"
+      },
       "latest_event": {
         "name": "Latest Event"
       },

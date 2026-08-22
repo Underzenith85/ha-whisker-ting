@@ -284,6 +284,10 @@ def test_manager_reconnect_uses_exponential_backoff() -> None:
         sleep.assert_awaited_once_with(22)
         assert manager._reconnect_attempts["ABC123"] == 3
         assert manager._connections["ABC123"] is replacement
+        diagnostics = manager.get_station_diagnostics("ABC123")
+        assert diagnostics.reconnect_count == 1
+        assert diagnostics.last_reconnect_utc is not None
+        assert diagnostics.last_reconnect_reason == "transport closed"
 
     asyncio.run(scenario())
 
@@ -323,6 +327,36 @@ def test_multi_device_station_state_is_independent() -> None:
         ]
 
     asyncio.run(scenario())
+
+
+def test_station_diagnostics_are_independent_bounded_and_lifecycle_scoped() -> None:
+    """Samples and sanitized reconnect details remain isolated by station."""
+    updates: list[str] = []
+    manager = stream_manager.WhiskerWebSocketManager(
+        object(), on_diagnostics_update=lambda station, value: updates.append(station)
+    )
+    sample_time = datetime(2026, 8, 22, 10, tzinfo=UTC)
+    manager._handle_voltage_update(
+        "STATION-A", websocket.VoltageData(sample_time, 120, 121, 119, 4)
+    )
+    manager._handle_disconnect(
+        "STATION-B",
+        "token=secret " + "x" * 300,
+        False,
+    )
+
+    first = manager.get_station_diagnostics("STATION-A")
+    second = manager.get_station_diagnostics("STATION-B")
+    assert first.last_sample_utc == sample_time
+    assert first.last_reconnect_reason is None
+    assert second.last_sample_utc is None
+    assert "secret" not in second.last_reconnect_reason
+    assert "[redacted]" in second.last_reconnect_reason
+    assert len(second.last_reconnect_reason) <= 160
+    assert updates == ["STATION-A", "STATION-B"]
+
+    asyncio.run(manager.disconnect_all())
+    assert manager.get_station_diagnostics("STATION-A").last_sample_utc is None
 
 
 def test_duplicate_disconnect_schedules_one_reconnect_task() -> None:

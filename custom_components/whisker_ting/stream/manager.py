@@ -5,12 +5,21 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 from collections.abc import Callable
+from dataclasses import replace
+from datetime import UTC, datetime
 
 import aiohttp
 
 from .client import WhiskerWebSocket
-from .models import PowerQualityData, StationState, StreamHealth, VoltageData
+from .models import (
+    PowerQualityData,
+    StationDiagnostics,
+    StationState,
+    StreamHealth,
+    VoltageData,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,6 +40,9 @@ class WhiskerWebSocketManager:
         on_power_quality_update: Callable[[str, PowerQualityData], None] | None = None,
         on_availability_update: Callable[[str, bool], None] | None = None,
         on_health_update: Callable[[str, StreamHealth], None] | None = None,
+        on_diagnostics_update: (
+            Callable[[str, StationDiagnostics], None] | None
+        ) = None,
     ) -> None:
         """Initialize the manager."""
         self._session = session
@@ -38,9 +50,11 @@ class WhiskerWebSocketManager:
         self._on_power_quality_update = on_power_quality_update
         self._on_availability_update = on_availability_update
         self._on_health_update = on_health_update
+        self._on_diagnostics_update = on_diagnostics_update
         self._connections: dict[str, WhiskerWebSocket] = {}
         self._voltage_data: dict[str, VoltageData] = {}
         self._station_states: dict[str, StationState] = {}
+        self._station_diagnostics: dict[str, StationDiagnostics] = {}
         self._credentials: dict[str, dict] = {}  # Store credentials for reconnect
         self._reconnect_tasks: dict[str, asyncio.Task] = {}
         self._reconnect_attempts: dict[str, int] = {}
@@ -49,6 +63,18 @@ class WhiskerWebSocketManager:
     def get_station_state(self, station_id: str) -> StationState:
         """Return the independently tracked state for a station."""
         return self._station_states.get(station_id, StationState())
+
+    def get_station_diagnostics(self, station_id: str) -> StationDiagnostics:
+        """Return bounded diagnostics retained for the manager lifecycle."""
+        return self._station_diagnostics.get(station_id, StationDiagnostics())
+
+    def _set_station_diagnostics(
+        self, station_id: str, diagnostics: StationDiagnostics
+    ) -> None:
+        """Store station diagnostics and publish through the coordinator throttle."""
+        self._station_diagnostics[station_id] = diagnostics
+        if self._on_diagnostics_update is not None:
+            self._on_diagnostics_update(station_id, diagnostics)
 
     def is_station_available(self, station_id: str) -> bool:
         """Return whether a station has a subscribed, live stream."""
@@ -80,6 +106,13 @@ class WhiskerWebSocketManager:
     def _handle_voltage_update(self, station_id: str, data: VoltageData) -> None:
         """Handle voltage update from WebSocket."""
         self._voltage_data[station_id] = data
+        self._set_station_diagnostics(
+            station_id,
+            replace(
+                self.get_station_diagnostics(station_id),
+                last_sample_utc=data.timestamp,
+            ),
+        )
         # Reset reconnect attempts on successful data
         self._reconnect_attempts[station_id] = 0
         state = self.get_station_state(station_id)
@@ -102,6 +135,20 @@ class WhiskerWebSocketManager:
         if self._on_voltage_update:
             self._on_voltage_update(station_id, data)
 
+    def _handle_power_quality_update(
+        self, station_id: str, data: PowerQualityData
+    ) -> None:
+        """Track any valid real-time sample before publishing its metric."""
+        self._set_station_diagnostics(
+            station_id,
+            replace(
+                self.get_station_diagnostics(station_id),
+                last_sample_utc=data.timestamp,
+            ),
+        )
+        if self._on_power_quality_update:
+            self._on_power_quality_update(station_id, data)
+
     def _handle_health_update(self, station_id: str, health: StreamHealth) -> None:
         """Handle an independently calculated station health transition."""
         state = self.get_station_state(station_id)
@@ -122,6 +169,15 @@ class WhiskerWebSocketManager:
         """Handle WebSocket disconnect - schedule reconnection."""
         if self._shutting_down:
             return
+
+        diagnostics = self.get_station_diagnostics(station_id)
+        self._set_station_diagnostics(
+            station_id,
+            replace(
+                diagnostics,
+                last_reconnect_reason=_sanitize_reconnect_reason(reason),
+            ),
+        )
 
         # Remove old connection
         if station_id in self._connections:
@@ -186,13 +242,22 @@ class WhiskerWebSocketManager:
                     return
 
                 self._reconnect_attempts[station_id] = attempts + 1
+                diagnostics = self.get_station_diagnostics(station_id)
+                self._set_station_diagnostics(
+                    station_id,
+                    replace(
+                        diagnostics,
+                        reconnect_count=diagnostics.reconnect_count + 1,
+                        last_reconnect_utc=datetime.now(UTC),
+                    ),
+                )
                 ws = WhiskerWebSocket(
                     session=self._session,
                     api_key=creds["api_key"],
                     user_id=creds["user_id"],
                     station_id=station_id,
                     on_voltage_update=self._handle_voltage_update,
-                    on_power_quality_update=self._on_power_quality_update,
+                    on_power_quality_update=self._handle_power_quality_update,
                     on_disconnect=self._handle_disconnect,
                     on_health_update=self._handle_health_update,
                 )
@@ -250,7 +315,7 @@ class WhiskerWebSocketManager:
             user_id=user_id,
             station_id=station_id,
             on_voltage_update=self._handle_voltage_update,
-            on_power_quality_update=self._on_power_quality_update,
+            on_power_quality_update=self._handle_power_quality_update,
             on_disconnect=self._handle_disconnect,
             on_health_update=self._handle_health_update,
         )
@@ -290,6 +355,7 @@ class WhiskerWebSocketManager:
             await ws.disconnect()
             del self._connections[station_id]
         self._station_states.clear()
+        self._station_diagnostics.clear()
         self._voltage_data.clear()
         self._credentials.clear()
         self._reconnect_attempts.clear()
@@ -311,6 +377,7 @@ class WhiskerWebSocketManager:
             await self._connections[station_id].disconnect()
             del self._connections[station_id]
         self._station_states.pop(station_id, None)
+        self._station_diagnostics.pop(station_id, None)
         self._voltage_data.pop(station_id, None)
         self._credentials.pop(station_id, None)
         self._reconnect_attempts.pop(station_id, None)
@@ -324,3 +391,14 @@ class WhiskerWebSocketManager:
         if ws:
             return await ws.wait_for_data(timeout=timeout)
         return False
+
+
+def _sanitize_reconnect_reason(reason: str) -> str:
+    """Bound and redact credential-shaped values from a reconnect reason."""
+    sanitized = " ".join(reason.split())
+    sanitized = re.sub(
+        r"(?i)(authorization|token|api[_-]?key|password)\s*[:=]\s*\S+",
+        r"\1=[redacted]",
+        sanitized,
+    )
+    return sanitized[:160] or "unspecified"
