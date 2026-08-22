@@ -3,41 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
-import sys
-from pathlib import Path
-from types import ModuleType, SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-ROOT = Path(__file__).parents[1]
-PACKAGE_PATH = ROOT / "custom_components" / "whisker_ting"
-
-
-def _load_websocket_module() -> ModuleType:
-    """Load websocket.py with a minimal aiohttp stub and no Home Assistant import."""
-    aiohttp = ModuleType("aiohttp")
-    aiohttp.ClientSession = object
-    aiohttp.ClientWebSocketResponse = object
-    aiohttp.WSMsgType = object
-    sys.modules.setdefault("aiohttp", aiohttp)
-
-    package = ModuleType("custom_components.whisker_ting")
-    package.__path__ = [str(PACKAGE_PATH)]
-    sys.modules.setdefault("custom_components.whisker_ting", package)
-    return importlib.import_module("custom_components.whisker_ting.websocket")
-
-
-websocket = _load_websocket_module()
-signalr = importlib.import_module("custom_components.whisker_ting.signalr")
-websocket.aiohttp.WSMsgType = SimpleNamespace(TEXT=1, BINARY=2, CLOSED=3, ERROR=4)
+from custom_components.whisker_ting import signalr, websocket
 
 
 class FakeMessage:
     """Minimal aiohttp WebSocket message."""
 
-    def __init__(self, message_type: int, data: Any) -> None:
+    def __init__(self, message_type: Any, data: Any) -> None:
         self.type = message_type
         self.data = data
 
@@ -250,3 +227,30 @@ def test_server_close_can_disable_manager_reconnect() -> None:
 
     assert "ABC123" not in manager._connections
     assert manager._reconnect_tasks == {}
+
+
+def test_manager_reconnect_uses_exponential_backoff() -> None:
+    """Reconnect attempts are throttled and replace the disconnected client."""
+
+    async def scenario() -> None:
+        manager = websocket.WhiskerWebSocketManager(object())
+        manager._credentials["ABC123"] = {"api_key": "fixture-key", "user_id": 42}
+        manager._reconnect_attempts["ABC123"] = 2
+        replacement = MagicMock()
+        replacement.connect = AsyncMock(return_value=True)
+        sleep = AsyncMock()
+
+        with (
+            patch.object(websocket.asyncio, "sleep", sleep),
+            patch.object(
+                websocket, "WhiskerWebSocket", return_value=replacement
+            ),
+        ):
+            manager._handle_disconnect("ABC123", "transport closed", True)
+            await manager._reconnect_tasks["ABC123"]
+
+        sleep.assert_awaited_once_with(20)
+        assert manager._reconnect_attempts["ABC123"] == 3
+        assert manager._connections["ABC123"] is replacement
+
+    asyncio.run(scenario())

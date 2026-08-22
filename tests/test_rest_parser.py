@@ -2,32 +2,15 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 import logging
-import sys
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
+from custom_components.whisker_ting import api
+
 ROOT = Path(__file__).parents[1]
-PACKAGE_PATH = ROOT / "custom_components" / "whisker_ting"
 FIXTURES = Path(__file__).parent / "fixtures"
-
-if "aiohttp" not in sys.modules:
-    aiohttp = ModuleType("aiohttp")
-    aiohttp.ClientSession = object
-    aiohttp.ClientResponse = object
-    aiohttp.ClientError = Exception
-    sys.modules["aiohttp"] = aiohttp
-
-package = sys.modules.get("custom_components.whisker_ting")
-if package is None:
-    package = ModuleType("custom_components.whisker_ting")
-    package.__path__ = [str(PACKAGE_PATH)]
-    sys.modules["custom_components.whisker_ting"] = package
-
-api = importlib.import_module("custom_components.whisker_ting.api")
 
 
 def _fixture(name: str) -> dict[str, Any]:

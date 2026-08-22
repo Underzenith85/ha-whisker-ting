@@ -1,3 +1,5 @@
 msgpack==1.2.1
-pytest==9.1.1
+pytest==8.3.4
+pytest-homeassistant-custom-component==0.13.199
+pycares==4.5.0
 ruff==0.16.4
