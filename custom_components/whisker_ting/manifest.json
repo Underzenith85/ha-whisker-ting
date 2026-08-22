@@ -1,10 +1,10 @@
 {
   "domain": "whisker_ting",
   "name": "Whisker Ting",
+  "after_dependencies": ["recorder"],
   "codeowners": ["@Underzenith85"],
   "config_flow": true,
   "dependencies": [],
-  "after_dependencies": ["recorder"],
   "documentation": "https://github.com/Underzenith85/ha-whisker-ting",
   "integration_type": "service",
   "iot_class": "cloud_push",
