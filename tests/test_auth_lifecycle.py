@@ -3,38 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
-import sys
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from types import ModuleType
 from typing import Any
 
 import pytest
 
-ROOT = Path(__file__).parents[1]
-PACKAGE_PATH = ROOT / "custom_components" / "whisker_ting"
-
-if "aiohttp" not in sys.modules:
-    aiohttp = ModuleType("aiohttp")
-    aiohttp.ClientSession = object
-    aiohttp.ClientResponse = object
-    aiohttp.ClientError = Exception
-    sys.modules["aiohttp"] = aiohttp
-
-
-def _load_api_module() -> ModuleType:
-    """Load api.py without importing the Home Assistant integration package."""
-    package = sys.modules.get("custom_components.whisker_ting")
-    if package is None:
-        package = ModuleType("custom_components.whisker_ting")
-        package.__path__ = [str(PACKAGE_PATH)]
-        sys.modules["custom_components.whisker_ting"] = package
-    return importlib.import_module("custom_components.whisker_ting.api")
-
-
-api = _load_api_module()
-auth = importlib.import_module("custom_components.whisker_ting.auth")
+from custom_components.whisker_ting import api, auth
 
 
 class FakeAuth:

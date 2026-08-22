@@ -84,10 +84,13 @@ This integration is not affiliated with or endorsed by Whisker Labs, Inc.
 
 ## Development
 
-Create a virtual environment, install the pinned test dependencies, and run the
-same checks used by CI:
+Python 3.12 is required by the pinned Home Assistant test environment. From a
+clean checkout, create a virtual environment, install the dependencies, and run
+the same checks used by CI:
 
 ```bash
+python3.12 -m venv .venv
+. .venv/bin/activate
 python -m pip install -r requirements_test.txt
 python -m pytest
 python -m ruff check custom_components tests
