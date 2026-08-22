@@ -202,6 +202,10 @@ The integration keeps REST transport, errors, validated models, and untrusted-re
 parsing in `custom_components/whisker_ting/api/`. Parser-focused tests live in
 `tests/api/`; sanitized response fixtures remain in `tests/fixtures/`.
 
+SignalR framing and the Ting-specific real-time client, parsers, models, and manager
+surface live in `custom_components/whisker_ting/stream/`. Stream protocol tests live
+in `tests/stream/` and remain fully offline.
+
 ## Support
 
 Report integration problems through the [issue tracker](https://github.com/Underzenith85/ha-whisker-ting/issues).
