@@ -193,6 +193,7 @@ python3.12 -m venv .venv
 python -m pip install -r requirements_test.txt
 python -m pytest
 python -m ruff check custom_components tests
+python -m mypy custom_components/whisker_ting/api/models.py custom_components/whisker_ting/auth/models.py custom_components/whisker_ting/auth/srp.py custom_components/whisker_ting/stream/models.py custom_components/whisker_ting/stream/signalr.py
 python -m compileall -q custom_components tests
 ```
 

@@ -18,8 +18,8 @@ from .const import (
     CONF_PASSWORD,
     CONF_REFRESH_TOKEN,
     CONF_SCAN_INTERVAL,
-    CONF_USERNAME,
     CONF_USER_ID,
+    CONF_USERNAME,
     DEFAULT_SCAN_INTERVAL,
 )
 from .coordinator import WhiskerDataUpdateCoordinator

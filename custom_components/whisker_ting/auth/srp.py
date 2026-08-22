@@ -50,7 +50,7 @@ MONTH_NAMES = [
 ]
 
 
-def hash_sha256(buf: bytes) -> str:
+def hash_sha256(buf: bytes | bytearray) -> str:
     """Hash using SHA256 and return zero-padded hex string."""
     # Cognito SRP-6a mandates SHA-256 as a protocol primitive; this is not local
     # password storage and cannot be substituted with a password KDF.
@@ -92,7 +92,7 @@ def pad_hex(long_int: int | str) -> str:
     return hash_str
 
 
-def compute_hkdf(ikm: bytes, salt: bytes) -> bytes:
+def compute_hkdf(ikm: bytes | bytearray, salt: bytes | bytearray) -> bytes:
     """HKDF-based key derivation."""
     prk = hmac.new(salt, ikm, hashlib.sha256).digest()
     info_bits_update = INFO_BITS + bytearray(chr(1), "utf-8")
