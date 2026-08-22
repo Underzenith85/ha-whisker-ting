@@ -1,0 +1,11 @@
+{
+  "level": 55,
+  "outdoorTemperatureC": -8.5,
+  "detectedLocationType": "UnconditionedSpace",
+  "detectedTimestampUtc": "2026-01-15T03:04:05Z",
+  "resolvedTimestampUtc": null,
+  "userAction": null,
+  "notificationType": "TA1",
+  "notificationDeliveryMode": "AppNotification",
+  "ignoredSensitiveField": "must not be retained"
+}

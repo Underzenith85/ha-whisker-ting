@@ -93,6 +93,18 @@
       "ufh_message": {
         "name": "Unverified Fire Hazard Message"
       },
+      "frozen_pipe_risk_level": {
+        "name": "Frozen Pipe Risk Level"
+      },
+      "frozen_pipe_outdoor_temperature": {
+        "name": "Frozen Pipe Outdoor Temperature"
+      },
+      "frozen_pipe_detected_location": {
+        "name": "Frozen Pipe Detected Location"
+      },
+      "frozen_pipe_last_event": {
+        "name": "Frozen Pipe Last Event"
+      },
       "device_type": {
         "name": "Device Type"
       },

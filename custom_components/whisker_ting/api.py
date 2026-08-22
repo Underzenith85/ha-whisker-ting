@@ -8,11 +8,17 @@ import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import quote
 
 import aiohttp
 
 from .auth import AuthenticationError, WhiskerAuth
-from .const import API_BASE_URL, API_USERS_ENDPOINT
+from .const import (
+    API_BASE_URL,
+    API_FROZEN_PIPE_HISTORY_ENDPOINT,
+    API_FROZEN_PIPE_STATUS_ENDPOINT,
+    API_USERS_ENDPOINT,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,6 +58,28 @@ class VoltageReading:
 
 
 @dataclass
+class FrozenPipeRecord:
+    """Read-only frozen-pipe status or history record."""
+
+    level: int | None = None
+    outdoor_temperature_c: float | None = None
+    detected_location_type: str | None = None
+    timestamp_utc: str | None = None
+    resolved_timestamp_utc: str | None = None
+    user_action: str | None = None
+    notification_type: str | None = None
+    notification_delivery_mode: str | None = None
+
+
+@dataclass
+class FrozenPipeData:
+    """Detailed frozen-pipe data for a device."""
+
+    status: FrozenPipeRecord | None = None
+    history: list[FrozenPipeRecord] = field(default_factory=list)
+
+
+@dataclass
 class DeviceState:
     """Represents the state of a Whisker Ting device."""
 
@@ -79,9 +107,13 @@ class DeviceState:
     # Real-time voltage (from WebSocket)
     voltage: VoltageReading = field(default_factory=VoltageReading)
 
+    # Detailed frozen-pipe information (from optional read-only endpoints)
+    frozen_pipe: FrozenPipeData = field(default_factory=FrozenPipeData)
+
     # Group info
     group_name: str | None = None
     group_id: int | None = None
+
 
 @dataclass
 class Site:
@@ -177,6 +209,18 @@ def _optional_number(value: Any) -> float | None:
 def _boolean(value: Any) -> bool:
     """Return only an explicit API boolean as a boolean."""
     return value if isinstance(value, bool) else False
+
+
+def _first_optional_string(data: dict[str, Any], *keys: str) -> str | None:
+    """Return the first valid string stored under one of the supplied keys."""
+    return next(
+        (
+            value
+            for key in keys
+            if (value := _optional_string(data.get(key))) is not None
+        ),
+        None,
+    )
 
 
 class WhiskerApiClient:
@@ -295,7 +339,7 @@ class WhiskerApiClient:
         method: str,
         endpoint: str,
         **kwargs: Any,
-    ) -> dict[str, Any]:
+    ) -> Any:
         """Make an authenticated request to the API."""
         token = await self._ensure_token()
 
@@ -344,6 +388,80 @@ class WhiskerApiClient:
         data = await self._request("GET", endpoint)
 
         return self._parse_user_data(data)
+
+    async def get_frozen_pipe_data(self, serial_number: str) -> FrozenPipeData:
+        """Get optional detailed frozen-pipe status and current history."""
+        encoded_serial = quote(serial_number, safe="")
+        status_endpoint = API_FROZEN_PIPE_STATUS_ENDPOINT.format(
+            serial_number=encoded_serial
+        )
+        history_endpoint = API_FROZEN_PIPE_HISTORY_ENDPOINT.format(
+            serial_number=encoded_serial
+        )
+        status_result, history_result = await asyncio.gather(
+            self._get_optional_data(status_endpoint),
+            self._get_optional_data(history_endpoint),
+        )
+        return FrozenPipeData(
+            status=self._parse_frozen_pipe_record(status_result),
+            history=self._parse_frozen_pipe_history(history_result),
+        )
+
+    async def _get_optional_data(self, endpoint: str) -> Any | None:
+        """Fetch an optional feature endpoint without failing the main update."""
+        try:
+            return await self._request("GET", endpoint)
+        except WhiskerApiError as err:
+            _LOGGER.debug("Optional Ting feature endpoint unavailable: %s", err)
+            return None
+
+    def _parse_frozen_pipe_record(self, data: Any) -> FrozenPipeRecord | None:
+        """Parse a frozen-pipe record while discarding unknown response fields."""
+        if not isinstance(data, dict) or not data:
+            return None
+        record = FrozenPipeRecord(
+            level=_optional_integer(data.get("level")),
+            outdoor_temperature_c=_optional_number(data.get("outdoorTemperatureC")),
+            detected_location_type=_optional_string(data.get("detectedLocationType")),
+            timestamp_utc=_first_optional_string(
+                data, "timestampUtc", "detectedTimestampUtc", "createdUtc"
+            ),
+            resolved_timestamp_utc=_first_optional_string(
+                data, "resolvedTimestampUtc", "resolvedUtc"
+            ),
+            user_action=_optional_string(data.get("userAction")),
+            notification_type=_optional_string(data.get("notificationType")),
+            notification_delivery_mode=_optional_string(
+                data.get("notificationDeliveryMode")
+            ),
+        )
+        return (
+            record
+            if any(value is not None for value in vars(record).values())
+            else None
+        )
+
+    def _parse_frozen_pipe_history(self, data: Any) -> list[FrozenPipeRecord]:
+        """Parse known single-record and collection history response shapes."""
+        if isinstance(data, list):
+            values = data
+        elif isinstance(data, dict):
+            collection = next(
+                (
+                    data.get(key)
+                    for key in ("history", "items", "records", "data")
+                    if isinstance(data.get(key), list)
+                ),
+                None,
+            )
+            values = collection if collection is not None else [data]
+        else:
+            values = []
+        return [
+            record
+            for value in values
+            if (record := self._parse_frozen_pipe_record(value)) is not None
+        ]
 
     def _parse_user_data(self, data: dict[str, Any]) -> UserData:
         """Parse user data from API response."""

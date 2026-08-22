@@ -6,6 +6,9 @@ import json
 import logging
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
+
+import pytest
 
 from custom_components.whisker_ting import api
 
@@ -103,3 +106,68 @@ def test_non_finite_coordinates_are_discarded() -> None:
 
     assert result.sites[0].latitude is None
     assert result.sites[0].longitude is None
+
+
+def test_parses_frozen_pipe_status_and_history_without_raw_data() -> None:
+    """Known frozen-pipe fields parse while unknown fields are discarded."""
+    client = _client()
+    status = client._parse_frozen_pipe_record(
+        _fixture("frozen_pipe_status_active.json")
+    )
+    history = client._parse_frozen_pipe_history(_fixture("frozen_pipe_history.json"))
+
+    assert status is not None
+    assert status.level == 55
+    assert status.outdoor_temperature_c == -8.5
+    assert status.detected_location_type == "UnconditionedSpace"
+    assert status.timestamp_utc == "2026-01-15T03:04:05Z"
+    assert status.notification_type == "TA1"
+    assert not hasattr(status, "ignored_sensitive_field")
+    assert len(history) == 2
+    assert history[0].resolved_timestamp_utc == "2026-01-14T06:00:00Z"
+    assert history[0].user_action == "ActionTurnedOnHeat"
+
+
+def test_frozen_pipe_parser_handles_empty_and_malformed_responses() -> None:
+    """Optional malformed responses produce safe empty models."""
+    client = _client()
+
+    assert client._parse_frozen_pipe_record(None) is None
+    assert client._parse_frozen_pipe_record([]) is None
+    assert client._parse_frozen_pipe_record({"unexpected": "value"}) is None
+    assert client._parse_frozen_pipe_history(None) == []
+    assert client._parse_frozen_pipe_history({"history": [None, "bad"]}) == []
+
+
+@pytest.mark.asyncio
+async def test_fetches_status_and_history_with_encoded_serial() -> None:
+    """Both read-only endpoints are fetched and combined per station."""
+    client = _client()
+    client._get_optional_data = AsyncMock(
+        side_effect=[
+            _fixture("frozen_pipe_status_active.json"),
+            _fixture("frozen_pipe_history.json"),
+        ]
+    )
+
+    result = await client.get_frozen_pipe_data("SERIAL/001")
+
+    assert result.status is not None
+    assert result.status.level == 55
+    assert len(result.history) == 2
+    assert [call.args[0] for call in client._get_optional_data.await_args_list] == [
+        "/api/v1/FrozenPipe/SERIAL%2F001",
+        "/api/v1/FrozenPipe/SERIAL%2F001/currentHistory",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_optional_endpoint_failure_returns_empty_data() -> None:
+    """Unavailable optional feature endpoints do not fail the account update."""
+    client = _client()
+    client._request = AsyncMock(side_effect=api.WhiskerApiError("not available"))
+
+    result = await client.get_frozen_pipe_data("SERIAL-001")
+
+    assert result.status is None
+    assert result.history == []

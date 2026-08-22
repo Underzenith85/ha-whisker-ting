@@ -61,7 +61,11 @@ BINARY_SENSOR_DESCRIPTIONS: tuple[WhiskerBinarySensorEntityDescription, ...] = (
         key="frozen_pipe",
         translation_key="frozen_pipe",
         device_class=BinarySensorDeviceClass.COLD,
-        value_fn=lambda state: state.has_frozen_pipe,
+        value_fn=lambda state: (
+            state.frozen_pipe.status.level > 0
+            if state.frozen_pipe.status and state.frozen_pipe.status.level is not None
+            else state.has_frozen_pipe
+        ),
     ),
     WhiskerBinarySensorEntityDescription(
         key="learning_mode",
