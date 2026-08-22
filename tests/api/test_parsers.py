@@ -64,7 +64,7 @@ def test_missing_and_null_nested_fields_use_safe_defaults(
     assert null_device.device_type == "Unknown"
     assert null_device.site_id == 0
     assert null_device.group_name is None
-    assert null_device.fire_hazard_status.message == "No Hazards Detected"
+    assert null_device.fire_hazard_status.message is None
     assert len(result.sites) == 1
     assert result.sites[0].display_name == ""
 

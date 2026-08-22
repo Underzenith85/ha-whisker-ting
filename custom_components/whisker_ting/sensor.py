@@ -43,7 +43,7 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
     # Real-time voltage sensors (from WebSocket)
     WhiskerSensorEntityDescription(
         key="voltage",
-        name="Current voltage",
+        translation_key="voltage",
         device_class=SensorDeviceClass.VOLTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
@@ -54,7 +54,7 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
     ),
     WhiskerSensorEntityDescription(
         key="voltage_high",
-        name="Voltage high",
+        translation_key="voltage_high",
         device_class=SensorDeviceClass.VOLTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
@@ -65,7 +65,7 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
     ),
     WhiskerSensorEntityDescription(
         key="voltage_low",
-        name="Voltage low",
+        translation_key="voltage_low",
         device_class=SensorDeviceClass.VOLTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
@@ -76,7 +76,7 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
     ),
     WhiskerSensorEntityDescription(
         key="average_peaks_max",
-        name="Average peaks max",
+        translation_key="average_peaks_max",
         device_class=SensorDeviceClass.VOLTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
@@ -157,7 +157,7 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
     ),
     WhiskerSensorEntityDescription(
         key="efh_level",
-        name="Electrical fire hazard level",
+        translation_key="efh_level",
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda state: state.fire_hazard_status.efh_status.level,
     ),

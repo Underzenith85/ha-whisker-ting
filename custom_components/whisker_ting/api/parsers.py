@@ -272,19 +272,19 @@ def parse_device(data: dict[str, Any], serial_number: str | None = None) -> Devi
     fire_hazard_status = FireHazardStatus(
         learning_mode=boolean(hazard_data.get("learningMode")),
         hazard_severity_level=optional_integer(hazard_data.get("hazardSeverityLevel")),
-        message=string(hazard_data.get("message"), "No Hazards Detected"),
+        message=optional_string(hazard_data.get("message")),
         efh_status=HazardStatus(
             status=optional_string(efh_data.get("status")),
             timestamp_utc=optional_string(efh_data.get("timestampUtc")),
             level=optional_integer(efh_data.get("level")),
-            message=string(efh_data.get("message"), "No Hazards Detected"),
+            message=optional_string(efh_data.get("message")),
             hex_color=string(efh_data.get("hexColor"), "#00FF00"),
         ),
         ufh_status=HazardStatus(
             status=optional_string(ufh_data.get("status")),
             timestamp_utc=optional_string(ufh_data.get("timestampUtc")),
             level=optional_integer(ufh_data.get("level")),
-            message=string(ufh_data.get("message"), "No Hazards Detected"),
+            message=optional_string(ufh_data.get("message")),
             hex_color=string(ufh_data.get("hexColor"), "#00FF00"),
         ),
         hex_color_light=string(hex_colors.get("light"), "#00FF00"),

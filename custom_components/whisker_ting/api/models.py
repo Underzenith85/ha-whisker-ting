@@ -12,7 +12,7 @@ class HazardStatus:
     status: str | None = None
     timestamp_utc: str | None = None
     level: int | None = None
-    message: str = "No Hazards Detected"
+    message: str | None = None
     hex_color: str = "#00FF00"
 
 
@@ -22,7 +22,7 @@ class FireHazardStatus:
 
     learning_mode: bool = False
     hazard_severity_level: int | None = None
-    message: str = "No Hazards Detected"
+    message: str | None = None
     efh_status: HazardStatus = field(default_factory=HazardStatus)
     ufh_status: HazardStatus = field(default_factory=HazardStatus)
     hex_color_light: str = "#00FF00"

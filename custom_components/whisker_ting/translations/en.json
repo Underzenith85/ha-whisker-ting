@@ -66,6 +66,18 @@
       }
     },
     "sensor": {
+      "voltage": {
+        "name": "Current voltage"
+      },
+      "voltage_high": {
+        "name": "Voltage high"
+      },
+      "voltage_low": {
+        "name": "Voltage low"
+      },
+      "average_peaks_max": {
+        "name": "Average peaks max"
+      },
       "frequency": {
         "name": "Frequency"
       },
