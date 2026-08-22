@@ -22,6 +22,7 @@ from .signalr import (
     decode_handshake_response,
     encode_invocation,
     encode_ping,
+    extract_categorical_payloads,
     extract_completions,
     extract_control_messages,
     extract_invocation_payloads,
@@ -48,6 +49,15 @@ class VoltageData:
     voltage_hi: float
     voltage_lo: float
     average_peaks_max: float
+
+
+@dataclass(frozen=True)
+class PowerQualityData:
+    """One categorical power-quality reading from the Ting stream."""
+
+    timestamp: datetime
+    category: str
+    value: float
 
 
 class StreamHealth(StrEnum):
@@ -86,6 +96,7 @@ class WhiskerWebSocket:
     HEALTH_CHECK_INTERVAL = 1.0
     INVOCATION_TIMEOUT = 10.0
     UNSUBSCRIBE_TIMEOUT = 5.0
+    SECONDARY_DATA_ELEMENTS = ("frequency", "thdMin", "thdAvg", "thdMax")
 
     def __init__(
         self,
@@ -94,6 +105,7 @@ class WhiskerWebSocket:
         user_id: int,
         station_id: str,
         on_voltage_update: Callable[[str, VoltageData], None] | None = None,
+        on_power_quality_update: Callable[[str, PowerQualityData], None] | None = None,
         on_disconnect: Callable[[str, str, bool], None] | None = None,
         on_health_update: Callable[[str, StreamHealth], None] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
@@ -104,6 +116,7 @@ class WhiskerWebSocket:
         self._user_id = user_id
         self._station_id = station_id
         self._on_voltage_update = on_voltage_update
+        self._on_power_quality_update = on_power_quality_update
         self._on_disconnect = on_disconnect
         self._on_health_update = on_health_update
         self._monotonic = monotonic
@@ -119,6 +132,7 @@ class WhiskerWebSocket:
         self._last_data_monotonic: float | None = None
         self._health = StreamHealth.STOPPED
         self._subscribed = False
+        self._subscribed_elements: set[str] = set()
         self._shutting_down = False
         self._disconnect_notified = False
 
@@ -171,6 +185,7 @@ class WhiskerWebSocket:
         """Initialize the device stream and mark it subscribed on success."""
         await self._invoke("InitializeStreaming", args)
         self._subscribed = True
+        self._subscribed_elements.add("ComboBinaryData")
 
     def _stream_args(self) -> list[Any]:
         """Return the server arguments that identify this station stream."""
@@ -185,13 +200,27 @@ class WhiskerWebSocket:
         if not self._subscribed:
             return
         try:
-            await self._invoke(
-                "UnInitializeStreaming",
-                self._stream_args(),
-                timeout=self.UNSUBSCRIBE_TIMEOUT,
+            subscribed_elements = self._subscribed_elements or {"ComboBinaryData"}
+            await asyncio.gather(
+                *(
+                    self._invoke(
+                        "UnInitializeStreaming",
+                        [
+                            {
+                                "StationId": self._station_id,
+                                "DataElement": data_element,
+                            },
+                            self._api_key,
+                            str(self._user_id),
+                        ],
+                        timeout=self.UNSUBSCRIBE_TIMEOUT,
+                    )
+                    for data_element in subscribed_elements
+                )
             )
         finally:
             self._subscribed = False
+            self._subscribed_elements.clear()
 
     def _handle_completions(self, data: bytes) -> None:
         """Resolve pending invocations represented in a binary message."""
@@ -228,9 +257,7 @@ class WhiskerWebSocket:
         self._subscribed = False
         if not self._shutting_down:
             self._set_health(StreamHealth.NOT_RECEIVING)
-        self._fail_pending_invocations(
-            SignalRInvocationError("WebSocket disconnected")
-        )
+        self._fail_pending_invocations(SignalRInvocationError("WebSocket disconnected"))
         current_task = asyncio.current_task()
         for task in (self._ping_task, self._receive_task, self._stale_check_task):
             if task is not None and task is not current_task and not task.done():
@@ -244,8 +271,8 @@ class WhiskerWebSocket:
         if self._on_disconnect:
             self._on_disconnect(self._station_id, reason, allow_reconnect)
 
-    async def _perform_handshake(self) -> None:
-        """Negotiate and validate the SignalR MessagePack protocol handshake."""
+    async def _perform_handshake(self) -> bytes | None:
+        """Negotiate SignalR MessagePack and return an appended hub payload."""
         if self._ws is None:
             raise SignalRHandshakeError("SignalR transport is not connected")
         await self._ws.send_str('{"protocol":"messagepack","version":1}\x1e')
@@ -253,9 +280,17 @@ class WhiskerWebSocket:
             message = await self._ws.receive(timeout=10)
         except TimeoutError as err:
             raise SignalRHandshakeError("SignalR handshake timed out") from err
-        if message.type != aiohttp.WSMsgType.TEXT:
-            raise SignalRHandshakeError("SignalR handshake response is not text")
-        decode_handshake_response(message.data)
+        if message.type not in (
+            aiohttp.WSMsgType.TEXT,
+            aiohttp.WSMsgType.BINARY,
+        ):
+            raise SignalRHandshakeError("SignalR handshake response has invalid type")
+        remainder = decode_handshake_response(message.data)
+        if isinstance(remainder, str):
+            raise SignalRHandshakeError(
+                "SignalR MessagePack payload after handshake is not binary"
+            )
+        return remainder
 
     @staticmethod
     def _parse_timestamp(value: Any) -> datetime:
@@ -312,6 +347,33 @@ class WhiskerWebSocket:
 
         return readings
 
+    def _decode_power_quality_data(self, data: bytes) -> list[PowerQualityData]:
+        """Decode the frequency and THD streams used by Ting 3.0.4."""
+        try:
+            payloads = extract_categorical_payloads(data)
+        except SignalRProtocolError as err:
+            _LOGGER.debug("Error decoding SignalR power-quality frame: %s", err)
+            return []
+        readings: list[PowerQualityData] = []
+        for payload in payloads:
+            try:
+                category = payload["Category"]
+                value = float(payload["Value"])
+                if category not in self.SECONDARY_DATA_ELEMENTS:
+                    continue
+                if not math.isfinite(value):
+                    raise ValueError("non-finite power-quality value")
+                readings.append(
+                    PowerQualityData(
+                        timestamp=self._parse_timestamp(payload.get("ObsTime")),
+                        category=category,
+                        value=value,
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        return readings
+
     async def connect(self) -> bool:
         """Connect to the SignalR hub."""
         try:
@@ -325,7 +387,7 @@ class WhiskerWebSocket:
             )
             self._shutting_down = False
             self._disconnect_notified = False
-            await self._perform_handshake()
+            initial_payload = await self._perform_handshake()
             _LOGGER.debug("SignalR handshake completed")
 
             self._connected = True
@@ -335,8 +397,37 @@ class WhiskerWebSocket:
             self._set_health(StreamHealth.DELAYED)
             self._receive_task = asyncio.create_task(self._receive_loop())
 
+            if initial_payload is not None:
+                self._handle_binary_message(initial_payload)
+
             # Subscribe to device stream using api_key as the token
             await self._subscribe(self._stream_args())
+
+            async def subscribe_optional(data_element: str) -> None:
+                try:
+                    await self._invoke(
+                        "InitializeStreaming",
+                        [
+                            {
+                                "StationId": self._station_id,
+                                "DataElement": data_element,
+                            },
+                            self._api_key,
+                            str(self._user_id),
+                        ],
+                    )
+                    self._subscribed_elements.add(data_element)
+                except SignalRInvocationError as err:
+                    _LOGGER.debug(
+                        "Optional %s stream unavailable for station %s: %s",
+                        data_element,
+                        self._station_id,
+                        err,
+                    )
+
+            await asyncio.gather(
+                *(subscribe_optional(value) for value in self.SECONDARY_DATA_ELEMENTS)
+            )
 
             # Start remaining background tasks after subscription succeeds
             self._ping_task = asyncio.create_task(self._ping_loop())
@@ -409,9 +500,7 @@ class WhiskerWebSocket:
         self._connected = False
         self._subscribed = False
         self._set_health(StreamHealth.STOPPED)
-        self._fail_pending_invocations(
-            SignalRInvocationError("WebSocket disconnected")
-        )
+        self._fail_pending_invocations(SignalRInvocationError("WebSocket disconnected"))
 
         for task in [self._receive_task]:
             if task:
@@ -453,18 +542,11 @@ class WhiskerWebSocket:
 
                     if msg.type == aiohttp.WSMsgType.BINARY:
                         try:
-                            self._handle_completions(msg.data)
-                            ping_count, close_messages = extract_control_messages(
-                                msg.data
-                            )
+                            close_messages = self._handle_binary_message(msg.data)
                         except SignalRProtocolError as err:
                             _LOGGER.error("SignalR protocol failure: %s", err)
                             self._transition_disconnected("protocol failure")
                             break
-                        if ping_count:
-                            _LOGGER.debug(
-                                "Received %d SignalR Ping message(s)", ping_count
-                            )
                         if close_messages:
                             close = close_messages[-1]
                             self._transition_disconnected(
@@ -472,17 +554,6 @@ class WhiskerWebSocket:
                                 allow_reconnect=close.allow_reconnect,
                             )
                             break
-                        for voltage_data in self._decode_voltage_data(msg.data):
-                            if self._on_voltage_update:
-                                self._last_data_time = datetime.now(UTC)
-                                self._last_data_monotonic = self._monotonic()
-                                self._set_health(StreamHealth.RECEIVING)
-                                self._on_voltage_update(
-                                    self._station_id, voltage_data
-                                )
-                                if not self._first_data_received.is_set():
-                                    self._first_data_received.set()
-
                     elif msg.type == aiohttp.WSMsgType.TEXT:
                         _LOGGER.warning(
                             "Unexpected text message after SignalR handshake"
@@ -492,9 +563,7 @@ class WhiskerWebSocket:
                         aiohttp.WSMsgType.CLOSED,
                         aiohttp.WSMsgType.ERROR,
                     ):
-                        self._transition_disconnected(
-                            f"transport closed ({msg.type})"
-                        )
+                        self._transition_disconnected(f"transport closed ({msg.type})")
                         break
 
                 except asyncio.TimeoutError:
@@ -509,6 +578,25 @@ class WhiskerWebSocket:
             if self._ws is not None and not self._ws.closed:
                 await self._ws.close()
 
+    def _handle_binary_message(self, data: bytes) -> list[Any]:
+        """Process one binary SignalR payload and return Close messages."""
+        self._handle_completions(data)
+        ping_count, close_messages = extract_control_messages(data)
+        if ping_count:
+            _LOGGER.debug("Received %d SignalR Ping message(s)", ping_count)
+        for voltage_data in self._decode_voltage_data(data):
+            if self._on_voltage_update:
+                self._last_data_time = datetime.now(UTC)
+                self._last_data_monotonic = self._monotonic()
+                self._set_health(StreamHealth.RECEIVING)
+                self._on_voltage_update(self._station_id, voltage_data)
+                if not self._first_data_received.is_set():
+                    self._first_data_received.set()
+        for reading in self._decode_power_quality_data(data):
+            if self._on_power_quality_update is not None:
+                self._on_power_quality_update(self._station_id, reading)
+        return close_messages
+
     async def _stale_data_check_loop(self) -> None:
         """Check for stale data and trigger reconnect if needed."""
         while self._connected and not self._shutting_down:
@@ -519,9 +607,7 @@ class WhiskerWebSocket:
                     break
 
                 if self._last_data_monotonic is not None:
-                    time_since_update = (
-                        self._monotonic() - self._last_data_monotonic
-                    )
+                    time_since_update = self._monotonic() - self._last_data_monotonic
                     if time_since_update >= self.NOT_RECEIVING_THRESHOLD:
                         self._set_health(StreamHealth.NOT_RECEIVING)
                         _LOGGER.error(
@@ -571,12 +657,14 @@ class WhiskerWebSocketManager:
         self,
         session: aiohttp.ClientSession,
         on_voltage_update: Callable[[str, VoltageData], None] | None = None,
+        on_power_quality_update: Callable[[str, PowerQualityData], None] | None = None,
         on_availability_update: Callable[[str, bool], None] | None = None,
         on_health_update: Callable[[str, StreamHealth], None] | None = None,
     ) -> None:
         """Initialize the manager."""
         self._session = session
         self._on_voltage_update = on_voltage_update
+        self._on_power_quality_update = on_power_quality_update
         self._on_availability_update = on_availability_update
         self._on_health_update = on_health_update
         self._connections: dict[str, WhiskerWebSocket] = {}
@@ -643,9 +731,7 @@ class WhiskerWebSocketManager:
         if self._on_voltage_update:
             self._on_voltage_update(station_id, data)
 
-    def _handle_health_update(
-        self, station_id: str, health: StreamHealth
-    ) -> None:
+    def _handle_health_update(self, station_id: str, health: StreamHealth) -> None:
         """Handle an independently calculated station health transition."""
         state = self.get_station_state(station_id)
         self._set_station_state(
@@ -735,6 +821,7 @@ class WhiskerWebSocketManager:
                     user_id=creds["user_id"],
                     station_id=station_id,
                     on_voltage_update=self._handle_voltage_update,
+                    on_power_quality_update=self._on_power_quality_update,
                     on_disconnect=self._handle_disconnect,
                     on_health_update=self._handle_health_update,
                 )
@@ -792,6 +879,7 @@ class WhiskerWebSocketManager:
             user_id=user_id,
             station_id=station_id,
             on_voltage_update=self._handle_voltage_update,
+            on_power_quality_update=self._on_power_quality_update,
             on_disconnect=self._handle_disconnect,
             on_health_update=self._handle_health_update,
         )

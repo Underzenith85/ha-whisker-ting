@@ -236,13 +236,31 @@ def test_decode_successful_handshake() -> None:
     assert signalr.decode_handshake_response("{}\x1e") is None
 
 
+def test_decode_binary_handshake_and_return_coalesced_payload() -> None:
+    """MessagePack handshakes may be binary and include the first hub frame."""
+    payload = signalr.encode_hub_message([signalr.MSG_TYPE_PING])
+    assert signalr.decode_handshake_response(b"{}\x1e" + payload) == payload
+
+
+def test_extract_categorical_power_quality_payloads() -> None:
+    """Ting secondary-stream arrays are extracted from their hub invocation."""
+    records = [
+        {"Category": "frequency", "ObsTime": "2026-08-22T00:00:00Z", "Value": "60.01"},
+        {"Category": "thdAvg", "ObsTime": "2026-08-22T00:00:00Z", "Value": "2.4"},
+    ]
+    frame = signalr.encode_hub_message(
+        [1, {}, None, "updateGraphMultiCategorical", [records]]
+    )
+
+    assert signalr.extract_categorical_payloads(frame) == records
+
+
 @pytest.mark.parametrize(
     "response",
     [
         "{}",
         "not-json\x1e",
         "[]\x1e",
-        "{}\x1e{}\x1e",
         '{"unexpected":true}\x1e',
     ],
 )
@@ -277,9 +295,7 @@ def test_extract_close_sanitizes_reason_and_reconnect_flag() -> None:
 
     assert ping_count == 0
     assert closes == [
-        signalr.CloseMessage(
-            reason="authorization=[redacted]", allow_reconnect=True
-        )
+        signalr.CloseMessage(reason="authorization=[redacted]", allow_reconnect=True)
     ]
 
 

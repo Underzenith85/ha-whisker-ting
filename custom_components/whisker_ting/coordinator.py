@@ -20,7 +20,12 @@ from .api import (
     WhiskerAuthError,
 )
 from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
-from .websocket import StreamHealth, VoltageData, WhiskerWebSocketManager
+from .websocket import (
+    PowerQualityData,
+    StreamHealth,
+    VoltageData,
+    WhiskerWebSocketManager,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -125,7 +130,33 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
                     voltage_hi=voltage_data.voltage_hi,
                     voltage_lo=voltage_data.voltage_lo,
                     average_peaks_max=voltage_data.average_peaks_max,
+                    frequency_hz=device_state.voltage.frequency_hz,
+                    thd_min_percent=device_state.voltage.thd_min_percent,
+                    thd_avg_percent=device_state.voltage.thd_avg_percent,
+                    thd_max_percent=device_state.voltage.thd_max_percent,
                 )
+                self._schedule_stream_listener_update()
+                break
+
+    @callback
+    def _handle_power_quality_update(
+        self, station_id: str, reading: PowerQualityData
+    ) -> None:
+        """Store a Ting 3.0.4 secondary power-quality stream reading."""
+        if self.data is None:
+            return
+        fields = {
+            "frequency": "frequency_hz",
+            "thdMin": "thd_min_percent",
+            "thdAvg": "thd_avg_percent",
+            "thdMax": "thd_max_percent",
+        }
+        field = fields.get(reading.category)
+        if field is None:
+            return
+        for device in self.data.values():
+            if device.station_id == station_id:
+                setattr(device.voltage, field, reading.value)
                 self._schedule_stream_listener_update()
                 break
 
@@ -135,6 +166,7 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
             self._ws_manager = WhiskerWebSocketManager(
                 session=self._session,
                 on_voltage_update=self._handle_voltage_update,
+                on_power_quality_update=self._handle_power_quality_update,
                 on_availability_update=self._handle_availability_update,
                 on_health_update=self._handle_stream_health_update,
             )
@@ -246,6 +278,10 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
                                 voltage_hi=voltage_data.voltage_hi,
                                 voltage_lo=voltage_data.voltage_lo,
                                 average_peaks_max=voltage_data.average_peaks_max,
+                                frequency_hz=device_state.voltage.frequency_hz,
+                                thd_min_percent=device_state.voltage.thd_min_percent,
+                                thd_avg_percent=device_state.voltage.thd_avg_percent,
+                                thd_max_percent=device_state.voltage.thd_max_percent,
                             )
 
             return data

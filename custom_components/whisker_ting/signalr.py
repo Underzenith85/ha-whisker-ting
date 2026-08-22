@@ -49,17 +49,38 @@ class CloseMessage:
     allow_reconnect: bool = False
 
 
-def decode_handshake_response(data: str) -> None:
-    """Validate a record-separator-terminated SignalR handshake response."""
-    if not isinstance(data, str) or not data.endswith(RECORD_SEPARATOR):
+def decode_handshake_response(data: str | bytes) -> str | bytes | None:
+    """Validate a SignalR handshake and return any coalesced hub payload.
+
+    SignalR permits the JSON handshake response to arrive in either a text or
+    binary WebSocket message. With the MessagePack protocol the official client
+    requests a binary transfer format, and Ting responds with binary ``{}\x1e``.
+    A server may append the first hub message after the record separator.
+    """
+    separator: str | bytes
+    if isinstance(data, bytes):
+        separator = RECORD_SEPARATOR.encode()
+    elif isinstance(data, str):
+        separator = RECORD_SEPARATOR
+    else:
+        raise SignalRHandshakeError("SignalR handshake has an invalid type")
+
+    separator_index = data.find(separator)
+    if separator_index < 0:
         raise SignalRHandshakeError(
             "SignalR handshake is not record-separator terminated"
         )
-    if data.count(RECORD_SEPARATOR) != 1:
-        raise SignalRHandshakeError("SignalR handshake contains extra records")
+
+    encoded_response = data[:separator_index]
+    remainder = data[separator_index + 1 :]
+    if isinstance(encoded_response, bytes):
+        try:
+            encoded_response = encoded_response.decode("utf-8")
+        except UnicodeError as err:
+            raise SignalRHandshakeError("SignalR handshake is not valid UTF-8") from err
 
     try:
-        response = json.loads(data[:-1])
+        response = json.loads(encoded_response)
     except (json.JSONDecodeError, UnicodeError) as err:
         raise SignalRHandshakeError("SignalR handshake is not valid JSON") from err
 
@@ -69,6 +90,8 @@ def decode_handshake_response(data: str) -> None:
         raise SignalRHandshakeError("SignalR handshake rejected by server")
     if response:
         raise SignalRHandshakeError("SignalR handshake response has unknown fields")
+
+    return remainder or None
 
 
 def _sanitize_close_reason(value: Any) -> str:
@@ -192,6 +215,31 @@ def extract_invocation_payloads(data: bytes, target: str) -> list[dict[str, Any]
     return payloads
 
 
+def extract_categorical_payloads(data: bytes) -> list[dict[str, Any]]:
+    """Return Ting 3.0.4 secondary power-quality stream records."""
+    payloads: list[dict[str, Any]] = []
+    for message in decode_hub_messages(data):
+        if message[0] != MSG_TYPE_INVOCATION or len(message) < 5:
+            continue
+        if message[3] != "updateGraphMultiCategorical":
+            continue
+        arguments = message[4]
+        if not isinstance(arguments, list) or not arguments:
+            raise SignalRProtocolError("SignalR Invocation has no arguments")
+        records = arguments[0]
+        if not isinstance(records, list):
+            raise SignalRProtocolError(
+                "Categorical SignalR payload must be a collection"
+            )
+        for record in records:
+            if not isinstance(record, dict):
+                raise SignalRProtocolError(
+                    "Categorical SignalR record must be an object"
+                )
+            payloads.append(record)
+    return payloads
+
+
 def extract_completions(data: bytes) -> list[CompletionMessage]:
     """Return validated Completion messages from framed hub data."""
     completions: list[CompletionMessage] = []
@@ -241,7 +289,9 @@ def extract_control_messages(data: bytes) -> tuple[int, list[CloseMessage]]:
             ping_count += 1
         elif message[0] == MSG_TYPE_CLOSE:
             if len(message) > 3:
-                raise SignalRProtocolError("SignalR Close message has unexpected fields")
+                raise SignalRProtocolError(
+                    "SignalR Close message has unexpected fields"
+                )
             error = message[1] if len(message) >= 2 else None
             allow_reconnect = message[2] if len(message) >= 3 else False
             if error is not None and not isinstance(error, str):
