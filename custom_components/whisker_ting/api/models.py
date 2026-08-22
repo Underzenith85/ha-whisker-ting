@@ -91,6 +91,17 @@ class VoltageReading:
         return replace(self, thd_max_percent=value)
 
 
+@dataclass(frozen=True)
+class VoltageHistoryPoint:
+    """Represent one validated aggregate from voltage history."""
+
+    start: datetime
+    minimum_v: float
+    maximum_v: float
+    average_v: float
+    coverage: float | None = None
+
+
 @dataclass
 class FrozenPipeRecord:
     """Represent a read-only frozen-pipe status or history record."""

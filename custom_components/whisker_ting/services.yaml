@@ -1,0 +1,22 @@
+import_voltage_history:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: whisker_ting
+    serial_number:
+      required: true
+      example: SERIAL-001
+      selector:
+        text:
+    start:
+      required: true
+      example: "2026-08-01T00:00:00+00:00"
+      selector:
+        datetime:
+    end:
+      required: true
+      example: "2026-08-02T00:00:00+00:00"
+      selector:
+        datetime:

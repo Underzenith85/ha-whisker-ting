@@ -1,0 +1,27 @@
+{
+  "unit": "V",
+  "data": [
+    {
+      "timestampUtc": "2026-08-21T00:05:00Z",
+      "minimum": 118.2,
+      "maximum": 121.4,
+      "average": 120.1,
+      "sampleCount": 55,
+      "expectedSampleCount": 60
+    },
+    {
+      "timestampUtc": "2026-08-21T00:35:00Z",
+      "minimum": 117.9,
+      "maximum": 121.8,
+      "average": 119.9,
+      "coverage": 0.95
+    },
+    {
+      "timestampUtc": "2026-08-21T01:00:00-07:00",
+      "minimum": 119.0,
+      "maximum": 121.0,
+      "average": 120.0,
+      "coverage": 1.0
+    }
+  ]
+}

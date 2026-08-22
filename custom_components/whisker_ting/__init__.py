@@ -23,6 +23,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
 )
 from .coordinator import WhiskerDataUpdateCoordinator
+from .history import async_register_history_service
 from .repairs import WhiskerRepairManager
 
 if TYPE_CHECKING:
@@ -35,6 +36,12 @@ else:
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.SENSOR]
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Set up integration-wide services."""
+    async_register_history_service(hass)
+    return True
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

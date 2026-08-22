@@ -14,6 +14,12 @@ API_USER_CONDITIONS_ENDPOINT = "/api/v1/Users/{user_id}/conditions"
 API_FROZEN_PIPE_STATUS_ENDPOINT = "/api/v1/FrozenPipe/{serial_number}"
 API_FROZEN_PIPE_HISTORY_ENDPOINT = "/api/v1/FrozenPipe/{serial_number}/currentHistory"
 API_NOTIFICATION_HISTORY_ENDPOINT = "/api/v1/Notifications/history/{user_id}"
+API_VOLTAGE_HISTORY_ENDPOINT = "/api/v3/Devices/{serial_number}/voltage/dateRange"
+
+# Explicit historical import limits. History is never fetched by the coordinator.
+MAX_VOLTAGE_HISTORY_DAYS = 31
+VOLTAGE_HISTORY_REQUEST_HOURS = 24
+SERVICE_IMPORT_VOLTAGE_HISTORY = "import_voltage_history"
 
 # SignalR WebSocket
 SIGNALR_URL = "wss://signalr.api.wskr.io/dataHub"

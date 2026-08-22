@@ -23,6 +23,7 @@ The integration provides read-only access to Ting account, device, hazard, froze
 - Frozen-pipe risk, temperature, location, and current-history data
 - Read-only notification history scoped to each device
 - Per-device stream-health diagnostics
+- Opt-in, bounded voltage-history import into Home Assistant long-term statistics
 - Configurable REST polling interval
 
 The account password is used to complete initial authentication and is not saved in the Home Assistant config entry. Home Assistant stores the renewable refresh token, Ting user ID, and API key needed for subsequent updates.
@@ -202,6 +203,25 @@ their explicitly associated Ting sensor or site device. Unknown future event typ
 remain visible through **Latest event**. Events without a valid sensor or site ID are
 not assigned heuristically.
 
+## Historical voltage statistics
+
+Historical voltage is not fetched during normal polling. To backfill Recorder, call
+`whisker_ting.import_voltage_history` from **Developer tools → Actions**, select the
+loaded config entry, enter a serial number from that entry, and provide timezone-aware
+start and end values. Each call is limited to 31 days, makes sequential requests of at
+most 24 hours, and returns the number of source points and imported hourly statistics.
+
+The service imports hourly voltage minimum, maximum, and mean values plus coverage
+when Ting supplies enough information to calculate it. Repeating an overlapping
+window updates the matching statistic timestamps rather than creating duplicates.
+Home Assistant derives daily and longer views from the hourly statistics according
+to Recorder retention. An empty or interrupted request writes nothing, and history
+failures do not affect current entities or coordinator availability.
+
+Backfills can increase Recorder database size. Import only the range you need and
+configure Recorder retention separately for your installation. The integration does
+not schedule history imports and does not fall back to an unverified older API.
+
 For example, after enabling **Last power outage** on a site device, an automation can
 react whenever Ting reports a newer outage:
 
@@ -225,7 +245,7 @@ actions:
 
 - Ting is a cloud service; an internet connection and working Ting services are required.
 - The cloud APIs are not documented as a public third-party integration API and may change without notice.
-- Historical voltage and power-quality time series are not currently imported.
+- Historical power-quality time series other than voltage are not currently imported.
 - Site-level events without a reliable device serial number are not assigned to a device.
 - The integration does not register for mobile push notifications.
 - BLE/Wi-Fi provisioning, device setup and reset, billing, subscriptions, surveys, contractor scheduling, and notification-management writes are intentionally unsupported.

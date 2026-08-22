@@ -63,6 +63,30 @@
       "description": "Ting explicitly denied access to {capability} for {entry_title}. Other integration features continue to work. Unsupported endpoints and temporary service failures do not create this repair. The issue clears automatically if access succeeds later."
     }
   },
+  "services": {
+    "import_voltage_history": {
+      "name": "Import voltage history",
+      "description": "Import a bounded Ting voltage-history window into long-term statistics.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry ID",
+          "description": "Loaded Whisker Ting config entry."
+        },
+        "serial_number": {
+          "name": "Serial number",
+          "description": "Ting device serial number belonging to the selected entry."
+        },
+        "start": {
+          "name": "Start",
+          "description": "Inclusive start with timezone; at most 31 days before the end."
+        },
+        "end": {
+          "name": "End",
+          "description": "Exclusive end with timezone."
+        }
+      }
+    }
+  },
   "entity": {
     "binary_sensor": {
       "fire_hazard": {

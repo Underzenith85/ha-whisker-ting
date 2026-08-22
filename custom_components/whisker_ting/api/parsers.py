@@ -17,6 +17,7 @@ from .models import (
     Site,
     TingEvent,
     UserData,
+    VoltageHistoryPoint,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -130,6 +131,80 @@ def parse_datetime(value: Any) -> datetime | None:
     except ValueError:
         return None
     return parsed.replace(tzinfo=parsed.tzinfo or UTC).astimezone(UTC)
+
+
+def parse_voltage_history(
+    data: Any, *, limit: int = 10_000
+) -> list[VoltageHistoryPoint]:
+    """Parse a bounded v3 voltage-history response into UTC aggregates."""
+    root = mapping(data)
+    unit = first_optional_string(root, "unit", "unitOfMeasure", "unitOfMeasurement")
+    if unit is not None and unit.lower() not in {"v", "volt", "volts"}:
+        return []
+
+    if isinstance(data, list):
+        values = data
+    else:
+        values = next(
+            (
+                candidate
+                for key in ("data", "items", "readings", "values")
+                if isinstance((candidate := root.get(key)), list)
+            ),
+            [],
+        )
+
+    points: dict[datetime, VoltageHistoryPoint] = {}
+    for value in values[:limit]:
+        item = mapping(value)
+        start = parse_datetime(
+            first_optional_string(
+                item, "timestampUtc", "startUtc", "timestamp", "start"
+            )
+        )
+        minimum = next(
+            (
+                parsed
+                for key in ("minimum", "min", "voltageMin")
+                if (parsed := optional_number(item.get(key))) is not None
+            ),
+            None,
+        )
+        maximum = next(
+            (
+                parsed
+                for key in ("maximum", "max", "voltageMax")
+                if (parsed := optional_number(item.get(key))) is not None
+            ),
+            None,
+        )
+        average = next(
+            (
+                parsed
+                for key in ("average", "avg", "mean", "voltageAverage")
+                if (parsed := optional_number(item.get(key))) is not None
+            ),
+            None,
+        )
+        if (
+            start is None
+            or minimum is None
+            or maximum is None
+            or average is None
+            or not minimum <= average <= maximum
+        ):
+            continue
+
+        coverage = optional_number(item.get("coverage"))
+        if coverage is None:
+            samples = optional_number(item.get("sampleCount"))
+            expected = optional_number(item.get("expectedSampleCount"))
+            if samples is not None and expected is not None and expected > 0:
+                coverage = samples / expected
+        if coverage is not None:
+            coverage = min(max(coverage, 0.0), 1.0)
+        points[start] = VoltageHistoryPoint(start, minimum, maximum, average, coverage)
+    return [points[start] for start in sorted(points)]
 
 
 def parse_frozen_pipe_record(data: Any) -> FrozenPipeRecord | None:
