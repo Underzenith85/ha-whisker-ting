@@ -168,6 +168,14 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
         value_fn=lambda state: _get_frozen_pipe_last_event(state),
     ),
     WhiskerSensorEntityDescription(
+        key="stream_health",
+        translation_key="stream_health",
+        device_class=SensorDeviceClass.ENUM,
+        options=["receiving", "delayed", "not_receiving", "stopped"],
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda state: state.stream_health,
+    ),
+    WhiskerSensorEntityDescription(
         key="device_type",
         translation_key="device_type",
         entity_category=EntityCategory.DIAGNOSTIC,

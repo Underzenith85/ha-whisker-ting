@@ -100,6 +100,7 @@ class DeviceState:
     is_hvac_verified: bool = False
     has_frozen_pipe: bool = False
     is_owner: bool = False
+    stream_health: str = "stopped"
 
     # Hazard status
     fire_hazard_status: FireHazardStatus = field(default_factory=FireHazardStatus)

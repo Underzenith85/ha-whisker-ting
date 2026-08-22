@@ -6,9 +6,11 @@ import asyncio
 import logging
 import math
 import random
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 import aiohttp
@@ -48,6 +50,15 @@ class VoltageData:
     average_peaks_max: float
 
 
+class StreamHealth(StrEnum):
+    """Health of a station's real-time data stream."""
+
+    RECEIVING = "receiving"
+    DELAYED = "delayed"
+    NOT_RECEIVING = "not_receiving"
+    STOPPED = "stopped"
+
+
 @dataclass(frozen=True)
 class StationState:
     """Connection, subscription, and stream liveness for one station."""
@@ -55,6 +66,7 @@ class StationState:
     connected: bool = False
     subscribed: bool = False
     live: bool = False
+    health: StreamHealth = StreamHealth.STOPPED
 
     @property
     def available(self) -> bool:
@@ -69,8 +81,9 @@ class SignalRInvocationError(Exception):
 class WhiskerWebSocket:
     """WebSocket client for Whisker Ting SignalR hub."""
 
-    # Consider data stale if no update in 30 seconds (normally updates every ~250ms)
-    STALE_DATA_THRESHOLD = 30
+    DELAYED_DATA_THRESHOLD = 5.0
+    NOT_RECEIVING_THRESHOLD = 10.0
+    HEALTH_CHECK_INTERVAL = 1.0
     INVOCATION_TIMEOUT = 10.0
     UNSUBSCRIBE_TIMEOUT = 5.0
 
@@ -82,6 +95,8 @@ class WhiskerWebSocket:
         station_id: str,
         on_voltage_update: Callable[[str, VoltageData], None] | None = None,
         on_disconnect: Callable[[str, str, bool], None] | None = None,
+        on_health_update: Callable[[str, StreamHealth], None] | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         """Initialize the WebSocket client."""
         self._session = session
@@ -90,6 +105,8 @@ class WhiskerWebSocket:
         self._station_id = station_id
         self._on_voltage_update = on_voltage_update
         self._on_disconnect = on_disconnect
+        self._on_health_update = on_health_update
+        self._monotonic = monotonic
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._connected = False
         self._ping_task: asyncio.Task | None = None
@@ -99,6 +116,8 @@ class WhiskerWebSocket:
         self._pending_invocations: dict[str, asyncio.Future[Any]] = {}
         self._first_data_received = asyncio.Event()
         self._last_data_time: datetime | None = None
+        self._last_data_monotonic: float | None = None
+        self._health = StreamHealth.STOPPED
         self._subscribed = False
         self._shutting_down = False
         self._disconnect_notified = False
@@ -193,12 +212,22 @@ class WhiskerWebSocket:
             if not future.done():
                 future.set_exception(error)
 
+    def _set_health(self, health: StreamHealth) -> None:
+        """Publish a stream health transition at most once."""
+        if self._health == health:
+            return
+        self._health = health
+        if self._on_health_update is not None:
+            self._on_health_update(self._station_id, health)
+
     def _transition_disconnected(
         self, reason: str, *, allow_reconnect: bool = True
     ) -> None:
         """Transition to disconnected and notify reconnect logic at most once."""
         self._connected = False
         self._subscribed = False
+        if not self._shutting_down:
+            self._set_health(StreamHealth.NOT_RECEIVING)
         self._fail_pending_invocations(
             SignalRInvocationError("WebSocket disconnected")
         )
@@ -302,6 +331,8 @@ class WhiskerWebSocket:
             self._connected = True
             self._subscribed = False
             self._last_data_time = datetime.now(UTC)
+            self._last_data_monotonic = self._monotonic()
+            self._set_health(StreamHealth.DELAYED)
             self._receive_task = asyncio.create_task(self._receive_loop())
 
             # Subscribe to device stream using api_key as the token
@@ -327,6 +358,7 @@ class WhiskerWebSocket:
         """Clean up transport and tasks after an unsuccessful connection."""
         self._connected = False
         self._subscribed = False
+        self._set_health(StreamHealth.STOPPED)
         self._fail_pending_invocations(
             SignalRInvocationError("WebSocket connection failed")
         )
@@ -376,6 +408,7 @@ class WhiskerWebSocket:
 
         self._connected = False
         self._subscribed = False
+        self._set_health(StreamHealth.STOPPED)
         self._fail_pending_invocations(
             SignalRInvocationError("WebSocket disconnected")
         )
@@ -442,6 +475,8 @@ class WhiskerWebSocket:
                         for voltage_data in self._decode_voltage_data(msg.data):
                             if self._on_voltage_update:
                                 self._last_data_time = datetime.now(UTC)
+                                self._last_data_monotonic = self._monotonic()
+                                self._set_health(StreamHealth.RECEIVING)
                                 self._on_voltage_update(
                                     self._station_id, voltage_data
                                 )
@@ -478,16 +513,17 @@ class WhiskerWebSocket:
         """Check for stale data and trigger reconnect if needed."""
         while self._connected and not self._shutting_down:
             try:
-                await asyncio.sleep(self.STALE_DATA_THRESHOLD)
+                await asyncio.sleep(self.HEALTH_CHECK_INTERVAL)
 
                 if not self._connected or self._shutting_down:
                     break
 
-                if self._last_data_time:
+                if self._last_data_monotonic is not None:
                     time_since_update = (
-                        datetime.now(UTC) - self._last_data_time
-                    ).total_seconds()
-                    if time_since_update > self.STALE_DATA_THRESHOLD:
+                        self._monotonic() - self._last_data_monotonic
+                    )
+                    if time_since_update >= self.NOT_RECEIVING_THRESHOLD:
+                        self._set_health(StreamHealth.NOT_RECEIVING)
                         _LOGGER.error(
                             "WebSocket data stale for station %s (no update in %.0f seconds), reconnecting",
                             self._station_id,
@@ -495,6 +531,8 @@ class WhiskerWebSocket:
                         )
                         self._transition_disconnected("voltage data became stale")
                         break
+                    if time_since_update >= self.DELAYED_DATA_THRESHOLD:
+                        self._set_health(StreamHealth.DELAYED)
 
             except asyncio.CancelledError:
                 break
@@ -534,11 +572,13 @@ class WhiskerWebSocketManager:
         session: aiohttp.ClientSession,
         on_voltage_update: Callable[[str, VoltageData], None] | None = None,
         on_availability_update: Callable[[str, bool], None] | None = None,
+        on_health_update: Callable[[str, StreamHealth], None] | None = None,
     ) -> None:
         """Initialize the manager."""
         self._session = session
         self._on_voltage_update = on_voltage_update
         self._on_availability_update = on_availability_update
+        self._on_health_update = on_health_update
         self._connections: dict[str, WhiskerWebSocket] = {}
         self._voltage_data: dict[str, VoltageData] = {}
         self._station_states: dict[str, StationState] = {}
@@ -571,6 +611,8 @@ class WhiskerWebSocketManager:
             and self._on_availability_update is not None
         ):
             self._on_availability_update(station_id, state.available)
+        if previous.health != state.health and self._on_health_update is not None:
+            self._on_health_update(station_id, state.health)
 
     def get_voltage_data(self, station_id: str) -> VoltageData | None:
         """Get the latest voltage data for a station."""
@@ -588,6 +630,7 @@ class WhiskerWebSocketManager:
                 connected=state.connected,
                 subscribed=state.subscribed,
                 live=True,
+                health=StreamHealth.RECEIVING,
             ),
         )
         _LOGGER.debug(
@@ -600,6 +643,22 @@ class WhiskerWebSocketManager:
         if self._on_voltage_update:
             self._on_voltage_update(station_id, data)
 
+    def _handle_health_update(
+        self, station_id: str, health: StreamHealth
+    ) -> None:
+        """Handle an independently calculated station health transition."""
+        state = self.get_station_state(station_id)
+        self._set_station_state(
+            station_id,
+            StationState(
+                connected=state.connected,
+                subscribed=state.subscribed,
+                live=health in (StreamHealth.RECEIVING, StreamHealth.DELAYED)
+                and state.live,
+                health=health,
+            ),
+        )
+
     def _handle_disconnect(
         self, station_id: str, reason: str, allow_reconnect: bool
     ) -> None:
@@ -610,7 +669,10 @@ class WhiskerWebSocketManager:
         # Remove old connection
         if station_id in self._connections:
             del self._connections[station_id]
-        self._set_station_state(station_id, StationState())
+        self._set_station_state(
+            station_id,
+            StationState(health=StreamHealth.NOT_RECEIVING),
+        )
 
         if not allow_reconnect:
             _LOGGER.warning(
@@ -674,6 +736,7 @@ class WhiskerWebSocketManager:
                     station_id=station_id,
                     on_voltage_update=self._handle_voltage_update,
                     on_disconnect=self._handle_disconnect,
+                    on_health_update=self._handle_health_update,
                 )
 
                 if await ws.connect():
@@ -685,6 +748,7 @@ class WhiskerWebSocketManager:
                             connected=True,
                             subscribed=True,
                             live=state.live,
+                            health=state.health,
                         ),
                     )
                     _LOGGER.info("Reconnected to station %s", station_id)
@@ -729,6 +793,7 @@ class WhiskerWebSocketManager:
             station_id=station_id,
             on_voltage_update=self._handle_voltage_update,
             on_disconnect=self._handle_disconnect,
+            on_health_update=self._handle_health_update,
         )
 
         if await ws.connect():
@@ -740,6 +805,7 @@ class WhiskerWebSocketManager:
                     connected=True,
                     subscribed=True,
                     live=state.live,
+                    health=StreamHealth.DELAYED,
                 ),
             )
             return True

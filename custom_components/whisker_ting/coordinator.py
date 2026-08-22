@@ -20,7 +20,7 @@ from .api import (
     WhiskerAuthError,
 )
 from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
-from .websocket import VoltageData, WhiskerWebSocketManager
+from .websocket import StreamHealth, VoltageData, WhiskerWebSocketManager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -85,6 +85,18 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
         )
         self._schedule_stream_listener_update()
 
+    @callback
+    def _handle_stream_health_update(
+        self, station_id: str, health: StreamHealth
+    ) -> None:
+        """Store and publish a station stream-health transition."""
+        if self.data is not None:
+            for device in self.data.values():
+                if device.station_id == station_id:
+                    device.stream_health = health.value
+                    break
+        self._schedule_stream_listener_update()
+
     def is_realtime_available(self, device_id: str) -> bool:
         """Return whether a device's real-time stream is subscribed and live."""
         if self.data is None or self._ws_manager is None:
@@ -124,6 +136,7 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
                 session=self._session,
                 on_voltage_update=self._handle_voltage_update,
                 on_availability_update=self._handle_availability_update,
+                on_health_update=self._handle_stream_health_update,
             )
 
         if not data:
@@ -215,6 +228,9 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
                     await asyncio.gather(*wait_tasks)
                 for device_state in data.values():
                     if device_state.station_id:
+                        device_state.stream_health = self._ws_manager.get_station_state(
+                            device_state.station_id
+                        ).health.value
                         voltage_data = self._ws_manager.get_voltage_data(
                             device_state.station_id
                         )
