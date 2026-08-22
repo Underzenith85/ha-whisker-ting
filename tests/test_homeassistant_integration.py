@@ -11,10 +11,16 @@ import pytest
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import UpdateFailed
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.whisker_ting import async_unload_entry
+from custom_components.whisker_ting import (
+    _register_site_devices,
+    async_setup_entry,
+    async_unload_entry,
+)
 from custom_components.whisker_ting.api import (
     DeviceState,
     FrozenPipeData,
@@ -275,6 +281,95 @@ def test_site_and_device_registry_identity_survive_renames_and_missing_sites() -
     assert entity.device_info["name"] == "Renamed"
     coordinator.sites = {}
     assert not entity.available
+
+
+@pytest.mark.asyncio
+async def test_site_devices_are_registered_before_children_and_reused_on_reload(
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Parent sites exist before via_device use and retain identity on reload."""
+    entry = MockConfigEntry(domain=DOMAIN, title="Fixture account")
+    entry.add_to_hass(hass)
+    sites = {
+        100: Site(100, 42, "Home"),
+        200: Site(200, 42, "Workshop"),
+    }
+    coordinator = MagicMock(sites=sites)
+    registry = dr.async_get(hass)
+
+    _register_site_devices(hass, entry, coordinator)
+    site_devices = {
+        site_id: registry.async_get_device(identifiers={(DOMAIN, f"site_{site_id}")})
+        for site_id in sites
+    }
+    assert all(site_devices.values())
+
+    caplog.clear()
+    child = registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "SERIAL-001")},
+        name="Fixture sensor",
+        via_device=(DOMAIN, "site_100"),
+    )
+    assert child.via_device_id == site_devices[100].id
+    assert "non existing `via_device`" not in caplog.text
+
+    sites[100].display_name = "Renamed home"
+    _register_site_devices(hass, entry, coordinator)
+    reloaded = registry.async_get_device(identifiers={(DOMAIN, "site_100")})
+    assert reloaded.id == site_devices[100].id
+    assert reloaded.name == "Renamed home"
+    assert len(registry.devices) == 3
+
+
+@pytest.mark.asyncio
+async def test_entry_setup_registers_site_before_forwarding_platforms(
+    hass: HomeAssistant,
+) -> None:
+    """Initial entity forwarding cannot race parent site registration."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Fixture account",
+        data={
+            CONF_USERNAME: "person@example.invalid",
+            CONF_REFRESH_TOKEN: "fixture-refresh-token",
+            CONF_USER_ID: 42,
+            CONF_API_KEY: "fixture-api-key",
+        },
+    )
+    entry.add_to_hass(hass)
+    client = MagicMock(
+        test_connection=AsyncMock(return_value=True),
+        refresh_token="fixture-refresh-token",
+        user_id=42,
+        api_key="fixture-api-key",
+    )
+    coordinator = MagicMock(
+        sites={100: Site(100, 42, "Home")},
+        data={"SERIAL-001": DeviceState("SERIAL-001", "Sensor", "FireSensor", 100)},
+        async_config_entry_first_refresh=AsyncMock(),
+    )
+
+    async def assert_site_exists_before_forwarding(*args: object) -> None:
+        registry = dr.async_get(hass)
+        assert registry.async_get_device(identifiers={(DOMAIN, "site_100")})
+
+    with (
+        patch("custom_components.whisker_ting.WhiskerApiClient", return_value=client),
+        patch(
+            "custom_components.whisker_ting.WhiskerDataUpdateCoordinator",
+            return_value=coordinator,
+        ),
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            AsyncMock(side_effect=assert_site_exists_before_forwarding),
+        ) as forward_setups,
+    ):
+        assert await async_setup_entry(hass, entry)
+
+    forward_setups.assert_awaited_once()
 
 
 def test_structured_event_entities_select_newest_matching_event() -> None:
