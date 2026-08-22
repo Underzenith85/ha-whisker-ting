@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -20,6 +21,7 @@ def _load_signalr_module() -> ModuleType:
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -185,3 +187,45 @@ def test_extract_invocation_payload_decodes_nested_messagepack() -> None:
     assert signalr.extract_invocation_payloads(frame, "updateComboBinaryData") == [
         payload
     ]
+
+
+def test_extract_void_completion() -> None:
+    """A void Completion resolves its invocation without a result."""
+    frame = signalr.encode_hub_message([3, {}, "7", 2])
+
+    assert signalr.extract_completions(frame) == [
+        signalr.CompletionMessage(invocation_id="7")
+    ]
+
+
+def test_extract_error_and_result_completions() -> None:
+    """Error and result Completion payloads retain their values."""
+    frames = b"".join(
+        [
+            signalr.encode_hub_message([3, {}, "8", 1, "not authorized"]),
+            signalr.encode_hub_message([3, {}, "9", 3, {"ready": True}]),
+        ]
+    )
+
+    assert signalr.extract_completions(frames) == [
+        signalr.CompletionMessage(invocation_id="8", error="not authorized"),
+        signalr.CompletionMessage(invocation_id="9", result={"ready": True}),
+    ]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        [3, {}, "1"],
+        [3, {}, None, 2],
+        [3, {}, "1", 1],
+        [3, {}, "1", 3],
+        [3, {}, "1", 99],
+    ],
+)
+def test_extract_completion_rejects_malformed_messages(
+    message: list[object],
+) -> None:
+    """Malformed Completion messages raise a protocol error."""
+    with pytest.raises(signalr.SignalRProtocolError):
+        signalr.extract_completions(signalr.encode_hub_message(message))

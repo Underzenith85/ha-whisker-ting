@@ -17,6 +17,7 @@ from .signalr import (
     SignalRProtocolError,
     encode_invocation,
     encode_ping,
+    extract_completions,
     extract_invocation_payloads,
 )
 
@@ -43,11 +44,16 @@ class VoltageData:
     average_peaks_max: float
 
 
+class SignalRInvocationError(Exception):
+    """Raised when a SignalR hub invocation fails."""
+
+
 class WhiskerWebSocket:
     """WebSocket client for Whisker Ting SignalR hub."""
 
     # Consider data stale if no update in 30 seconds (normally updates every ~250ms)
     STALE_DATA_THRESHOLD = 30
+    INVOCATION_TIMEOUT = 10.0
 
     def __init__(
         self,
@@ -72,23 +78,80 @@ class WhiskerWebSocket:
         self._receive_task: asyncio.Task | None = None
         self._stale_check_task: asyncio.Task | None = None
         self._message_id = 0
+        self._pending_invocations: dict[str, asyncio.Future[Any]] = {}
         self._first_data_received = asyncio.Event()
         self._last_data_time: datetime | None = None
+        self._subscribed = False
         self._shutting_down = False
 
     @property
     def connected(self) -> bool:
-        """Return True if connected."""
-        return self._connected
+        """Return True if connected and subscribed to the device stream."""
+        return self._connected and self._subscribed
 
-    def _encode_invocation(self, method: str, args: list) -> bytes:
+    def _encode_invocation(self, method: str, args: list) -> tuple[str, bytes]:
         """Encode a SignalR invocation message."""
         self._message_id += 1
-        return encode_invocation(str(self._message_id), method, args)
+        invocation_id = str(self._message_id)
+        return invocation_id, encode_invocation(invocation_id, method, args)
 
     def _encode_ping(self) -> bytes:
         """Encode a SignalR ping message."""
         return encode_ping()
+
+    async def _invoke(
+        self,
+        method: str,
+        args: list[Any],
+        timeout: float | None = None,
+    ) -> Any:
+        """Invoke a hub method and wait for its matching Completion."""
+        if self._ws is None or self._ws.closed:
+            raise SignalRInvocationError("WebSocket is not connected")
+
+        invocation_id, message = self._encode_invocation(method, args)
+        future = asyncio.get_running_loop().create_future()
+        self._pending_invocations[invocation_id] = future
+
+        try:
+            await self._ws.send_bytes(message)
+            try:
+                return await asyncio.wait_for(
+                    future,
+                    timeout=self.INVOCATION_TIMEOUT if timeout is None else timeout,
+                )
+            except TimeoutError as err:
+                raise SignalRInvocationError(
+                    f"SignalR invocation {method} timed out"
+                ) from err
+        finally:
+            self._pending_invocations.pop(invocation_id, None)
+            if not future.done():
+                future.cancel()
+
+    async def _subscribe(self, args: list[Any]) -> None:
+        """Initialize the device stream and mark it subscribed on success."""
+        await self._invoke("InitializeStreaming", args)
+        self._subscribed = True
+
+    def _handle_completions(self, data: bytes) -> None:
+        """Resolve pending invocations represented in a binary message."""
+        for completion in extract_completions(data):
+            future = self._pending_invocations.get(completion.invocation_id)
+            if future is None or future.done():
+                continue
+            if completion.error is not None:
+                future.set_exception(
+                    SignalRInvocationError("SignalR invocation rejected by server")
+                )
+            else:
+                future.set_result(completion.result)
+
+    def _fail_pending_invocations(self, error: SignalRInvocationError) -> None:
+        """Fail every invocation still waiting for a Completion."""
+        for future in self._pending_invocations.values():
+            if not future.done():
+                future.set_exception(error)
 
     @staticmethod
     def _parse_timestamp(value: Any) -> datetime:
@@ -168,20 +231,20 @@ class WhiskerWebSocket:
             elif msg.type == aiohttp.WSMsgType.TEXT:
                 _LOGGER.debug("Received handshake response: %s", msg.data)
 
+            self._connected = True
+            self._subscribed = False
+            self._last_data_time = datetime.now(UTC)
+            self._receive_task = asyncio.create_task(self._receive_loop())
+
             # Subscribe to device stream using api_key as the token
             init_args = [
                 {"StationId": self._station_id, "DataElement": "ComboBinaryData"},
                 self._api_key,  # Use api_key directly as the stream token
                 str(self._user_id),
             ]
-            init_msg = self._encode_invocation("InitializeStreaming", init_args)
-            await self._ws.send_bytes(init_msg)
+            await self._subscribe(init_args)
 
-            self._connected = True
-            self._last_data_time = datetime.now(UTC)
-
-            # Start background tasks
-            self._receive_task = asyncio.create_task(self._receive_loop())
+            # Start remaining background tasks after subscription succeeds
             self._ping_task = asyncio.create_task(self._ping_loop())
             self._stale_check_task = asyncio.create_task(self._stale_data_check_loop())
 
@@ -191,12 +254,30 @@ class WhiskerWebSocket:
         except Exception as err:
             _LOGGER.error("Failed to connect to SignalR hub: %s", err)
             self._connected = False
+            self._subscribed = False
+            self._fail_pending_invocations(
+                SignalRInvocationError("WebSocket connection failed")
+            )
+            if self._receive_task:
+                self._receive_task.cancel()
+                try:
+                    await self._receive_task
+                except asyncio.CancelledError:
+                    pass
+                self._receive_task = None
+            if self._ws and not self._ws.closed:
+                await self._ws.close()
+            self._ws = None
             return False
 
     async def disconnect(self) -> None:
         """Disconnect from the SignalR hub."""
         self._shutting_down = True
         self._connected = False
+        self._subscribed = False
+        self._fail_pending_invocations(
+            SignalRInvocationError("WebSocket disconnected")
+        )
 
         for task in [self._ping_task, self._receive_task, self._stale_check_task]:
             if task:
@@ -238,6 +319,10 @@ class WhiskerWebSocket:
                 )
 
                 if msg.type == aiohttp.WSMsgType.BINARY:
+                    try:
+                        self._handle_completions(msg.data)
+                    except SignalRProtocolError as err:
+                        _LOGGER.debug("Error decoding SignalR Completion: %s", err)
                     for voltage_data in self._decode_voltage_data(msg.data):
                         if self._on_voltage_update:
                             self._last_data_time = datetime.now(UTC)
@@ -255,6 +340,10 @@ class WhiskerWebSocket:
                 ):
                     _LOGGER.warning("WebSocket closed or error: %s", msg.type)
                     self._connected = False
+                    self._subscribed = False
+                    self._fail_pending_invocations(
+                        SignalRInvocationError("WebSocket disconnected")
+                    )
                     break
 
             except asyncio.TimeoutError:
@@ -264,6 +353,10 @@ class WhiskerWebSocket:
             except Exception as err:
                 _LOGGER.error("Error in receive loop: %s", err)
                 self._connected = False
+                self._subscribed = False
+                self._fail_pending_invocations(
+                    SignalRInvocationError("WebSocket receive failed")
+                )
                 break
 
         # Notify manager that we disconnected (for reconnection)
