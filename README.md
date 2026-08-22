@@ -261,6 +261,19 @@ logger:
 
 Debug output must not be shared without reviewing it for account or device information. Never publish passwords, tokens, API keys, serial numbers, MAC addresses, addresses, or unsanitized API responses.
 
+### Repairs
+
+Home Assistant Repairs provides deduplicated guidance for authentication that needs
+attention, sustained real-time stream failures, a device repeatedly reported offline,
+persistent absence of valid live samples, and optional capabilities explicitly denied
+by Ting. Authentication failures also start Home Assistant's reauthentication flow.
+
+Ordinary reconnect attempts and temporary endpoint failures do not create Repairs.
+Device and stream conditions must persist across three successful REST updates before
+a Repair appears, and they clear on the first recovered update. Explicit authorization
+failures create a capability Repair immediately; unsupported endpoints do not. All
+Repairs are scoped to the config entry and, where applicable, the individual device.
+
 ## Development
 
 Python 3.12 and [uv](https://docs.astral.sh/uv/) are required for development.

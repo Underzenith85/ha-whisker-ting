@@ -23,6 +23,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
 )
 from .coordinator import WhiskerDataUpdateCoordinator
+from .repairs import WhiskerRepairManager
 
 if TYPE_CHECKING:
     from typing import TypeAlias
@@ -80,7 +81,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     # Create the coordinator
-    coordinator = WhiskerDataUpdateCoordinator(hass, client, session, scan_interval)
+    repair_manager = WhiskerRepairManager(hass, entry.entry_id, entry.title)
+    coordinator = WhiskerDataUpdateCoordinator(
+        hass, client, session, scan_interval, repair_manager
+    )
 
     # Fetch initial data
     await coordinator.async_config_entry_first_refresh()
@@ -112,3 +116,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_shutdown()
 
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove Repairs owned by a deleted config entry."""
+    WhiskerRepairManager(hass, entry.entry_id, entry.title).clear_all()

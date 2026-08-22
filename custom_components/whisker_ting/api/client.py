@@ -76,6 +76,7 @@ class WhiskerApiClient:
         self._token_expiry: datetime | None = None
         self._lock = asyncio.Lock()
         self._sites: dict[int, Site] = {}
+        self._unauthorized_capabilities: set[str] = set()
 
     @property
     def user_id(self) -> int | None:
@@ -96,6 +97,11 @@ class WhiskerApiClient:
     def sites(self) -> dict[int, Site]:
         """Return the most recently validated sites by stable site ID."""
         return self._sites
+
+    @property
+    def unauthorized_capabilities(self) -> frozenset[str]:
+        """Return optional capabilities rejected with explicit authorization errors."""
+        return frozenset(self._unauthorized_capabilities)
 
     async def _ensure_token(self) -> str:
         """Ensure we have a valid access token."""
@@ -252,7 +258,7 @@ class WhiskerApiClient:
         if not self._user_id:
             await self._ensure_token()
         endpoint = API_USER_CONDITIONS_ENDPOINT.format(user_id=self._user_id)
-        data = await self._get_optional_data(endpoint)
+        data = await self._get_optional_data(endpoint, capability="conditions")
         return parse_conditions(data)
 
     async def get_frozen_pipe_data(self, serial_number: str) -> FrozenPipeData:
@@ -265,8 +271,8 @@ class WhiskerApiClient:
             serial_number=encoded_serial
         )
         status_result, history_result = await asyncio.gather(
-            self._get_optional_data(status_endpoint),
-            self._get_optional_data(history_endpoint),
+            self._get_optional_data(status_endpoint, capability="frozen_pipe"),
+            self._get_optional_data(history_endpoint, capability="frozen_pipe"),
         )
         return FrozenPipeData(
             status=parse_frozen_pipe_record(status_result),
@@ -281,6 +287,7 @@ class WhiskerApiClient:
         endpoint = API_NOTIFICATION_HISTORY_ENDPOINT.format(user_id=self._user_id)
         data = await self._get_optional_data(
             endpoint,
+            capability="event_history",
             params={
                 "sentStartUtc": (now - timedelta(days=days)).isoformat(),
                 "sentEndUtc": now.isoformat(),
@@ -290,12 +297,27 @@ class WhiskerApiClient:
         )
         return parse_event_history(data)
 
-    async def _get_optional_data(self, endpoint: str, **kwargs: Any) -> Any | None:
+    async def _get_optional_data(
+        self, endpoint: str, *, capability: str | None = None, **kwargs: Any
+    ) -> Any | None:
         """Fetch an optional feature endpoint without failing the main update."""
         try:
-            return await self._request("GET", endpoint, **kwargs)
+            result = await self._request("GET", endpoint, **kwargs)
+            if capability:
+                self._unauthorized_capabilities.discard(capability)
+            return result
         except WhiskerAuthError:
             raise
+        except WhiskerAuthorizationError as err:
+            if capability:
+                self._unauthorized_capabilities.add(capability)
+            _LOGGER.debug("Optional Ting capability is not authorized: %s", err)
+            return None
+        except WhiskerNotFoundError as err:
+            if capability:
+                self._unauthorized_capabilities.discard(capability)
+            _LOGGER.debug("Optional Ting capability is unsupported: %s", err)
+            return None
         except WhiskerApiError as err:
             _LOGGER.debug("Optional Ting feature endpoint unavailable: %s", err)
             return None

@@ -41,6 +41,28 @@
       }
     }
   },
+  "issues": {
+    "reauthentication_required": {
+      "title": "Whisker Ting authentication expired",
+      "description": "Home Assistant could no longer renew credentials for {entry_title} and has started reauthentication. Open **Settings > Devices & services**, select the Whisker Ting integration, and complete the reauthentication prompt."
+    },
+    "stream_unavailable": {
+      "title": "Ting real-time stream is unavailable",
+      "description": "REST updates for {device_name} are succeeding, but its real-time SignalR stream has remained unavailable across several updates. Check network access to Ting and reload the integration after connectivity is restored. This issue clears automatically when the stream recovers."
+    },
+    "device_offline": {
+      "title": "Ting device is persistently offline",
+      "description": "Ting has reported {device_name} offline across several updates. Check power and network connectivity for the Ting sensor. This issue clears automatically after Ting reports the device online."
+    },
+    "live_samples_missing": {
+      "title": "Ting live samples are missing",
+      "description": "The stream for {device_name} is connected or reconnecting but has not produced a valid voltage, frequency, or THD sample across several updates. This issue clears automatically after a valid sample arrives."
+    },
+    "optional_capability_unauthorized": {
+      "title": "Ting optional capability is no longer authorized",
+      "description": "Ting explicitly denied access to {capability} for {entry_title}. Other integration features continue to work. Unsupported endpoints and temporary service failures do not create this repair. The issue clears automatically if access succeeds later."
+    }
+  },
   "entity": {
     "binary_sensor": {
       "fire_hazard": {
