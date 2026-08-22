@@ -1,92 +1,182 @@
 # Whisker Ting Integration for Home Assistant
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![GitHub Release](https://img.shields.io/github/release/aidenmitchell/ha-whisker-ting.svg)](https://github.com/aidenmitchell/ha-whisker-ting/releases)
+[![Tests](https://github.com/Underzenith85/ha-whisker-ting/actions/workflows/tests.yml/badge.svg)](https://github.com/Underzenith85/ha-whisker-ting/actions/workflows/tests.yml)
 
-Home Assistant integration for [Whisker Labs Ting](https://www.tingfire.com/) electrical fire safety sensors.
+An unofficial Home Assistant integration for monitoring [Whisker Labs Ting](https://www.tingfire.com/) electrical fire safety sensors.
+
+> [!WARNING]
+> This is an independent community project. It is not created, maintained, affiliated with, authorized by, or endorsed by Whisker Labs, Inc. Ting and Whisker Labs are trademarks of their respective owner.
+
+The integration provides read-only access to Ting account, device, hazard, frozen-pipe, notification, and real-time voltage data.
+
+> [!IMPORTANT]
+> This integration is not currently published to HACS. Install it manually from this repository. Do not add it as a HACS custom repository yet.
 
 ## Features
 
-- **Real-time voltage monitoring** via WebSocket connection
-  - Current voltage
-  - Voltage high/low
-  - Average peaks
-- **Fire hazard status** monitoring
-  - Electrical Fire Hazard (EFH) detection
-  - Utility Fire Hazard (UFH) detection
-  - Learning mode status
-- **Device diagnostics**
-  - Firmware version
-  - WiFi/Bluetooth MAC addresses
-  - Serial number
+- AWS Cognito authentication with automatic access-token refresh
+- Multiple Ting devices under one account
+- Real-time voltage streaming over SignalR WebSockets
+- Explicit electrical-fire and power-quality hazard states
+- Frozen-pipe risk, temperature, location, and current-history data
+- Read-only notification history scoped to each device
+- Per-device stream-health diagnostics
+- Configurable REST polling interval
+
+The account password is used to complete initial authentication and is not saved in the Home Assistant config entry. Home Assistant stores the renewable refresh token, Ting user ID, and API key needed for subsequent updates.
 
 ## Installation
 
-### HACS (Recommended)
+### Manual installation
 
-1. Open HACS in Home Assistant
-2. Click the three dots in the top right corner
-3. Select "Custom repositories"
-4. Add `https://github.com/aidenmitchell/ha-whisker-ting` as an Integration
-5. Click "Download" on the Whisker Ting integration
-6. Restart Home Assistant
+1. Download or clone [this repository](https://github.com/Underzenith85/ha-whisker-ting).
+2. Copy `custom_components/whisker_ting` into your Home Assistant configuration directory:
 
-### Manual Installation
+   ```text
+   config/custom_components/whisker_ting
+   ```
 
-1. Download the latest release from [GitHub](https://github.com/aidenmitchell/ha-whisker-ting/releases)
-2. Extract and copy the `custom_components/whisker_ting` folder to your Home Assistant `config/custom_components/` directory
-3. Restart Home Assistant
+3. Restart Home Assistant.
+4. Clear the browser cache if Whisker Ting does not appear in the integration picker.
 
 ## Configuration
 
-1. Go to **Settings** → **Devices & Services**
-2. Click **Add Integration**
-3. Search for "Whisker Ting"
-4. Enter your Whisker Labs account credentials (email and password)
+1. Open **Settings → Devices & services**.
+2. Select **Add integration**.
+3. Search for **Whisker Ting**.
+4. Enter the email address and password used by the Ting application.
 
-## Sensors
+One config entry represents one Ting account. Every supported device returned for that account is created as a separate Home Assistant device.
 
-| Sensor | Description |
-|--------|-------------|
-| Current voltage | Real-time voltage reading (WebSocket) |
-| Voltage high | Peak high voltage |
-| Voltage low | Peak low voltage |
-| Hazard status | Overall hazard status (no_hazards, hazard_detected, learning) |
-| EFH status | Electrical Fire Hazard status |
-| UFH status | Utility Fire Hazard status |
+### Options
 
-## Binary Sensors
+The REST polling interval can be configured from the integration options. Valid values are 30–3600 seconds, with a default of 60 seconds.
 
-| Sensor | Description |
-|--------|-------------|
-| Fire hazard | On when any fire hazard is detected |
-| Learning mode | On when the device is in learning mode |
+Real-time voltage is delivered separately over a WebSocket and is not limited by the REST polling interval. Entity updates from the high-frequency stream are published to Home Assistant at most once per second.
 
-## Requirements
+## Entities
 
-- Home Assistant 2024.1.0 or newer
-- Whisker Labs Ting device
-- Whisker Labs account
+Some diagnostic entities are disabled by default and can be enabled from the device page.
+
+### Sensors
+
+| Entity | Default | Description |
+| --- | --- | --- |
+| Current voltage | Enabled | Latest real-time voltage reading |
+| Voltage high | Enabled | High value from the latest voltage sample |
+| Voltage low | Enabled | Low value from the latest voltage sample |
+| Average peaks max | Disabled | Average peak value from the stream |
+| Hazard status | Enabled | Normalized overall hazard state |
+| Hazard message | Enabled | Account-provided overall hazard message |
+| Electrical fire hazard status | Enabled | Raw modeled EFH status |
+| Electrical fire hazard message | Enabled | EFH status message |
+| Electrical fire hazard level | Enabled | EFH diagnostic level; not treated as a boolean |
+| Unverified fire hazard status | Enabled | Raw modeled UFH status |
+| Unverified fire hazard message | Enabled | UFH status message |
+| Frozen pipe risk level | Enabled | Detailed frozen-pipe risk level when supported |
+| Frozen pipe outdoor temperature | Disabled | Outdoor temperature associated with frozen-pipe evaluation |
+| Frozen pipe detected location | Disabled | Conditioned, unconditioned, or unknown-space classification |
+| Frozen pipe last event | Disabled | Latest modeled frozen-pipe event timestamp |
+| Latest event | Enabled | Latest read-only Ting notification for the device |
+| Stream health | Enabled | Health of the device's live voltage stream |
+| Hazard severity level | Disabled | Ting hazard workflow severity value |
+| Device type | Enabled | Ting device type |
+| Firmware version | Disabled | Device firmware version |
+| Wi-Fi MAC address | Disabled | Device Wi-Fi address |
+| Bluetooth MAC address | Disabled | Device Bluetooth address |
+| Serial number | Disabled | Ting serial number |
+| Group | Disabled | Ting account group name |
+
+### Hazard status values
+
+The overall hazard-status sensor reports one of:
+
+- `no_hazards`
+- `fire_hazard`
+- `power_quality_hazard`
+- `elevated_suspicious`
+- `reviewed_not_fire`
+- `learning`
+- `unknown`
+
+Hazards are derived from explicit Ting EFH and UFH status values. A positive numeric level alone does not activate a hazard.
+
+### Stream health values
+
+- `receiving` — live data is arriving normally
+- `delayed` — the last valid reading is retained, but no new data has arrived for approximately five seconds
+- `not_receiving` — no data has arrived for approximately ten seconds and reconnection is attempted
+- `stopped` — the stream was intentionally stopped
+
+Only real-time voltage entities become unavailable when the stream is no longer receiving data. REST-backed hazard and diagnostic entities remain available while REST updates continue succeeding.
+
+### Binary sensors
+
+| Entity | Default | Description |
+| --- | --- | --- |
+| Fire hazard | Enabled | Ting account reports an active fire condition |
+| Electrical fire hazard | Enabled | EFH status is elevated, possible fire, or hazard found |
+| Power quality hazard | Enabled | UFH status reports a power-quality hazard |
+| Frozen pipe risk | Enabled | Detailed frozen-pipe risk, falling back to the account flag |
+| Learning mode | Enabled | Device is learning the home's electrical environment |
+| HVAC verified | Disabled | Ting reports HVAC verification complete |
+| Is owner | Disabled | Account is marked as the device owner |
+
+## Latest-event attributes
+
+When notification history is available, the latest-event sensor can expose:
+
+- Event ID
+- Event category
+- UTC timestamp
+- Title and message
+- Number of retained events in the current history window
+
+Notification history is read-only. The integration does not acknowledge, clear, or alter Ting notifications.
+
+## Limitations
+
+- Ting is a cloud service; an internet connection and working Ting services are required.
+- The cloud APIs are not documented as a public third-party integration API and may change without notice.
+- Historical voltage and power-quality time series are not currently imported.
+- Site-level events without a reliable device serial number are not assigned to a device.
+- The integration does not register for mobile push notifications.
+- BLE/Wi-Fi provisioning, device setup and reset, billing, subscriptions, surveys, contractor scheduling, and notification-management writes are intentionally unsupported.
+- This integration does not replace Ting or emergency-safety guidance. Do not rely on Home Assistant as the sole notification path for a fire or electrical hazard.
 
 ## Troubleshooting
 
-### Voltage shows "Unknown" briefly on startup
+### Voltage is unknown after startup
 
-This is normal - the integration waits for the WebSocket connection to receive its first data packet before displaying values.
+The integration waits for the SignalR connection, subscription acknowledgement, and first valid data packet. Check the stream-health sensor if voltage remains unknown.
 
-### Authentication errors
+### Stream health is delayed or not receiving
 
-Ensure you're using the same email and password you use in the Whisker Labs mobile app.
+Confirm that the Ting device is online and the Home Assistant host can reach Ting's cloud services. The integration automatically attempts reconnection when data stops arriving.
 
-## Credits
+### Authentication failed
 
-This integration is not affiliated with or endorsed by Whisker Labs, Inc.
+Use the same email address and password used by the Ting application. If the refresh token is rejected, Home Assistant starts a reauthentication flow so the account can be connected again.
+
+### Frozen-pipe or event entities are unknown
+
+These are optional account/device capabilities. Unsupported or unauthorized optional endpoints do not prevent the rest of the integration from loading.
+
+### Collecting diagnostics
+
+Enable debug logging temporarily:
+
+```yaml
+logger:
+  logs:
+    custom_components.whisker_ting: debug
+```
+
+Debug output must not be shared without reviewing it for account or device information. Never publish passwords, tokens, API keys, serial numbers, MAC addresses, addresses, or unsanitized API responses.
 
 ## Development
 
-Python 3.12 is required by the pinned Home Assistant test environment. From a
-clean checkout, create a virtual environment, install the dependencies, and run
-the same checks used by CI:
+Python 3.12 is required by the pinned Home Assistant test environment. From a clean checkout:
 
 ```bash
 python3.12 -m venv .venv
@@ -97,9 +187,18 @@ python -m ruff check custom_components tests
 python -m compileall -q custom_components tests
 ```
 
-Tests must mock Ting and Cognito traffic. Never commit account credentials,
-tokens, device identifiers, or unsanitized API responses.
+Tests must mock Ting and Cognito traffic. Never commit account credentials, tokens, device identifiers, or unsanitized API responses.
+
+## Support
+
+Report integration problems through the [issue tracker](https://github.com/Underzenith85/ha-whisker-ting/issues).
+
+Do not contact Whisker Labs for support with this Home Assistant integration. For Ting device, account, or safety-service support, use Whisker Labs' official support channels.
+
+## Attribution
+
+This software is an independent, unofficial integration and is not affiliated with or endorsed by Whisker Labs, Inc. Product and company names are used only to identify compatibility.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT License — see [LICENSE](LICENSE).
