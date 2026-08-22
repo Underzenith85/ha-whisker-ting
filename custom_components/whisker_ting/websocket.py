@@ -14,10 +14,13 @@ import aiohttp
 
 from .const import SIGNALR_URL
 from .signalr import (
+    SignalRHandshakeError,
     SignalRProtocolError,
+    decode_handshake_response,
     encode_invocation,
     encode_ping,
     extract_completions,
+    extract_control_messages,
     extract_invocation_payloads,
 )
 
@@ -62,7 +65,7 @@ class WhiskerWebSocket:
         user_id: int,
         station_id: str,
         on_voltage_update: Callable[[str, VoltageData], None] | None = None,
-        on_disconnect: Callable[[str], None] | None = None,
+        on_disconnect: Callable[[str, str, bool], None] | None = None,
     ) -> None:
         """Initialize the WebSocket client."""
         self._session = session
@@ -83,6 +86,7 @@ class WhiskerWebSocket:
         self._last_data_time: datetime | None = None
         self._subscribed = False
         self._shutting_down = False
+        self._disconnect_notified = False
 
     @property
     def connected(self) -> bool:
@@ -153,6 +157,37 @@ class WhiskerWebSocket:
             if not future.done():
                 future.set_exception(error)
 
+    def _transition_disconnected(
+        self, reason: str, *, allow_reconnect: bool = True
+    ) -> None:
+        """Transition to disconnected and notify reconnect logic at most once."""
+        self._connected = False
+        self._subscribed = False
+        self._fail_pending_invocations(
+            SignalRInvocationError("WebSocket disconnected")
+        )
+        if self._shutting_down or self._disconnect_notified:
+            return
+        self._disconnect_notified = True
+        _LOGGER.warning(
+            "SignalR disconnected for station %s: %s", self._station_id, reason
+        )
+        if self._on_disconnect:
+            self._on_disconnect(self._station_id, reason, allow_reconnect)
+
+    async def _perform_handshake(self) -> None:
+        """Negotiate and validate the SignalR MessagePack protocol handshake."""
+        if self._ws is None:
+            raise SignalRHandshakeError("SignalR transport is not connected")
+        await self._ws.send_str('{"protocol":"messagepack","version":1}\x1e')
+        try:
+            message = await self._ws.receive(timeout=10)
+        except TimeoutError as err:
+            raise SignalRHandshakeError("SignalR handshake timed out") from err
+        if message.type != aiohttp.WSMsgType.TEXT:
+            raise SignalRHandshakeError("SignalR handshake response is not text")
+        decode_handshake_response(message.data)
+
     @staticmethod
     def _parse_timestamp(value: Any) -> datetime:
         """Parse the timestamp representation used by the Ting stream."""
@@ -219,17 +254,10 @@ class WhiskerWebSocket:
                     "Origin": "ionic://localhost",
                 },
             )
-
-            # Send protocol negotiation
-            handshake = '{"protocol":"messagepack","version":1}\x1e'
-            await self._ws.send_str(handshake)
-
-            # Wait for handshake response
-            msg = await self._ws.receive(timeout=10)
-            if msg.type == aiohttp.WSMsgType.BINARY:
-                _LOGGER.debug("Received handshake response (binary)")
-            elif msg.type == aiohttp.WSMsgType.TEXT:
-                _LOGGER.debug("Received handshake response: %s", msg.data)
+            self._shutting_down = False
+            self._disconnect_notified = False
+            await self._perform_handshake()
+            _LOGGER.debug("SignalR handshake completed")
 
             self._connected = True
             self._subscribed = False
@@ -251,24 +279,32 @@ class WhiskerWebSocket:
             _LOGGER.info("Connected to SignalR hub for station %s", self._station_id)
             return True
 
+        except SignalRHandshakeError as err:
+            _LOGGER.error("SignalR handshake failure: %s", err)
+            await self._cleanup_failed_connect()
+            return False
         except Exception as err:
             _LOGGER.error("Failed to connect to SignalR hub: %s", err)
-            self._connected = False
-            self._subscribed = False
-            self._fail_pending_invocations(
-                SignalRInvocationError("WebSocket connection failed")
-            )
-            if self._receive_task:
-                self._receive_task.cancel()
-                try:
-                    await self._receive_task
-                except asyncio.CancelledError:
-                    pass
-                self._receive_task = None
-            if self._ws and not self._ws.closed:
-                await self._ws.close()
-            self._ws = None
+            await self._cleanup_failed_connect()
             return False
+
+    async def _cleanup_failed_connect(self) -> None:
+        """Clean up transport and tasks after an unsuccessful connection."""
+        self._connected = False
+        self._subscribed = False
+        self._fail_pending_invocations(
+            SignalRInvocationError("WebSocket connection failed")
+        )
+        if self._receive_task:
+            self._receive_task.cancel()
+            try:
+                await self._receive_task
+            except asyncio.CancelledError:
+                pass
+            self._receive_task = None
+        if self._ws and not self._ws.closed:
+            await self._ws.close()
+        self._ws = None
 
     async def disconnect(self) -> None:
         """Disconnect from the SignalR hub."""
@@ -321,8 +357,19 @@ class WhiskerWebSocket:
                 if msg.type == aiohttp.WSMsgType.BINARY:
                     try:
                         self._handle_completions(msg.data)
+                        ping_count, close_messages = extract_control_messages(msg.data)
                     except SignalRProtocolError as err:
-                        _LOGGER.debug("Error decoding SignalR Completion: %s", err)
+                        _LOGGER.error("SignalR protocol failure: %s", err)
+                        self._transition_disconnected("protocol failure")
+                        break
+                    if ping_count:
+                        _LOGGER.debug("Received %d SignalR Ping message(s)", ping_count)
+                    if close_messages:
+                        close = close_messages[-1]
+                        self._transition_disconnected(
+                            close.reason, allow_reconnect=close.allow_reconnect
+                        )
+                        break
                     for voltage_data in self._decode_voltage_data(msg.data):
                         if self._on_voltage_update:
                             self._last_data_time = datetime.now(UTC)
@@ -332,17 +379,14 @@ class WhiskerWebSocket:
                                 self._first_data_received.set()
 
                 elif msg.type == aiohttp.WSMsgType.TEXT:
-                    _LOGGER.debug("Received text message: %s", msg.data)
+                    _LOGGER.warning("Unexpected text message after SignalR handshake")
 
                 elif msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.ERROR,
                 ):
-                    _LOGGER.warning("WebSocket closed or error: %s", msg.type)
-                    self._connected = False
-                    self._subscribed = False
-                    self._fail_pending_invocations(
-                        SignalRInvocationError("WebSocket disconnected")
+                    self._transition_disconnected(
+                        f"transport closed ({msg.type})"
                     )
                     break
 
@@ -352,17 +396,8 @@ class WhiskerWebSocket:
                 break
             except Exception as err:
                 _LOGGER.error("Error in receive loop: %s", err)
-                self._connected = False
-                self._subscribed = False
-                self._fail_pending_invocations(
-                    SignalRInvocationError("WebSocket receive failed")
-                )
+                self._transition_disconnected("receive failure")
                 break
-
-        # Notify manager that we disconnected (for reconnection)
-        if not self._shutting_down and self._on_disconnect:
-            _LOGGER.warning("WebSocket disconnected for station %s, triggering reconnect", self._station_id)
-            self._on_disconnect(self._station_id)
 
     async def _stale_data_check_loop(self) -> None:
         """Check for stale data and trigger reconnect if needed."""
@@ -383,10 +418,7 @@ class WhiskerWebSocket:
                             self._station_id,
                             time_since_update,
                         )
-                        self._connected = False
-                        # Trigger reconnect via callback
-                        if self._on_disconnect:
-                            self._on_disconnect(self._station_id)
+                        self._transition_disconnected("voltage data became stale")
                         break
 
             except asyncio.CancelledError:
@@ -453,7 +485,9 @@ class WhiskerWebSocketManager:
         if self._on_voltage_update:
             self._on_voltage_update(station_id, data)
 
-    def _handle_disconnect(self, station_id: str) -> None:
+    def _handle_disconnect(
+        self, station_id: str, reason: str, allow_reconnect: bool
+    ) -> None:
         """Handle WebSocket disconnect - schedule reconnection."""
         if self._shutting_down:
             return
@@ -461,6 +495,14 @@ class WhiskerWebSocketManager:
         # Remove old connection
         if station_id in self._connections:
             del self._connections[station_id]
+
+        if not allow_reconnect:
+            _LOGGER.warning(
+                "SignalR server disabled reconnect for station %s: %s",
+                station_id,
+                reason,
+            )
+            return
 
         # Schedule reconnection
         if station_id not in self._reconnect_tasks or self._reconnect_tasks[station_id].done():

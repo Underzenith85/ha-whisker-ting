@@ -6,7 +6,7 @@ import asyncio
 import importlib
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -31,6 +31,15 @@ def _load_websocket_module() -> ModuleType:
 
 websocket = _load_websocket_module()
 signalr = importlib.import_module("custom_components.whisker_ting.signalr")
+websocket.aiohttp.WSMsgType = SimpleNamespace(TEXT=1, BINARY=2, CLOSED=3, ERROR=4)
+
+
+class FakeMessage:
+    """Minimal aiohttp WebSocket message."""
+
+    def __init__(self, message_type: int, data: Any) -> None:
+        self.type = message_type
+        self.data = data
 
 
 class FakeWebSocket:
@@ -40,6 +49,8 @@ class FakeWebSocket:
         self.closed = False
         self.sent: list[bytes] = []
         self.message_sent = asyncio.Event()
+        self.text_sent: list[str] = []
+        self.responses: list[FakeMessage | Exception] = []
 
     async def send_bytes(self, data: bytes) -> None:
         """Capture a binary message."""
@@ -49,6 +60,17 @@ class FakeWebSocket:
     async def close(self) -> None:
         """Close the fake transport."""
         self.closed = True
+
+    async def send_str(self, data: str) -> None:
+        """Capture a text message."""
+        self.text_sent.append(data)
+
+    async def receive(self, timeout: float | None = None) -> FakeMessage:
+        """Return or raise the next configured response."""
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 def _client() -> tuple[Any, FakeWebSocket]:
@@ -144,3 +166,87 @@ def test_disconnect_fails_pending_invocation() -> None:
         assert transport.closed
 
     asyncio.run(scenario())
+
+
+def test_handshake_succeeds_with_terminated_empty_response() -> None:
+    """The client sends and validates the MessagePack handshake."""
+
+    async def scenario() -> None:
+        client, transport = _client()
+        transport.responses.append(
+            FakeMessage(websocket.aiohttp.WSMsgType.TEXT, "{}\x1e")
+        )
+        await client._perform_handshake()
+        assert transport.text_sent == [
+            '{"protocol":"messagepack","version":1}\x1e'
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_handshake_timeout_is_a_protocol_failure() -> None:
+    """A missing handshake response raises a distinct handshake error."""
+
+    async def scenario() -> None:
+        client, transport = _client()
+        transport.responses.append(TimeoutError())
+        with pytest.raises(signalr.SignalRHandshakeError, match="timed out"):
+            await client._perform_handshake()
+
+    asyncio.run(scenario())
+
+
+def test_handshake_rejects_unexpected_websocket_type() -> None:
+    """Binary and control messages cannot masquerade as a handshake response."""
+
+    async def scenario() -> None:
+        client, transport = _client()
+        transport.responses.append(
+            FakeMessage(websocket.aiohttp.WSMsgType.BINARY, b"{}\x1e")
+        )
+        with pytest.raises(signalr.SignalRHandshakeError, match="not text"):
+            await client._perform_handshake()
+
+    asyncio.run(scenario())
+
+
+def test_close_transitions_and_notifies_exactly_once() -> None:
+    """A Close message propagates one sanitized reconnect decision."""
+
+    async def scenario() -> None:
+        notifications: list[tuple[str, str, bool]] = []
+        client, transport = _client()
+        client._on_disconnect = lambda station, reason, reconnect: notifications.append(
+            (station, reason, reconnect)
+        )
+        transport.responses.append(
+            FakeMessage(
+                websocket.aiohttp.WSMsgType.BINARY,
+                signalr.encode_hub_message(
+                    [7, "api_key=secret-value", True]
+                ),
+            )
+        )
+
+        await client._receive_loop()
+        client._transition_disconnected("second transition")
+
+        assert not client.connected
+        assert notifications == [
+            ("ABC123", "api_key=[redacted]", True)
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_server_close_can_disable_manager_reconnect() -> None:
+    """The manager honors the structured Close allow-reconnect flag."""
+    manager = websocket.WhiskerWebSocketManager(object())
+    manager._connections["ABC123"] = object()
+
+    manager._handle_disconnect(
+        "ABC123", "server closed the SignalR connection", False
+    )
+
+    assert "ABC123" not in manager._connections
+    assert manager._reconnect_tasks == {}

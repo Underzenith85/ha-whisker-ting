@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,6 +15,9 @@ MAX_VARINT_BYTES = 5
 MSG_TYPE_INVOCATION = 1
 MSG_TYPE_COMPLETION = 3
 MSG_TYPE_PING = 6
+MSG_TYPE_CLOSE = 7
+
+RECORD_SEPARATOR = "\x1e"
 
 COMPLETION_ERROR = 1
 COMPLETION_VOID = 2
@@ -23,6 +28,10 @@ class SignalRProtocolError(ValueError):
     """Raised when a SignalR binary message is malformed or incomplete."""
 
 
+class SignalRHandshakeError(SignalRProtocolError):
+    """Raised when the SignalR JSON handshake response is invalid or rejected."""
+
+
 @dataclass(frozen=True)
 class CompletionMessage:
     """A decoded SignalR Completion message."""
@@ -30,6 +39,49 @@ class CompletionMessage:
     invocation_id: str
     error: str | None = None
     result: Any = None
+
+
+@dataclass(frozen=True)
+class CloseMessage:
+    """A decoded SignalR Close message."""
+
+    reason: str
+    allow_reconnect: bool = False
+
+
+def decode_handshake_response(data: str) -> None:
+    """Validate a record-separator-terminated SignalR handshake response."""
+    if not isinstance(data, str) or not data.endswith(RECORD_SEPARATOR):
+        raise SignalRHandshakeError(
+            "SignalR handshake is not record-separator terminated"
+        )
+    if data.count(RECORD_SEPARATOR) != 1:
+        raise SignalRHandshakeError("SignalR handshake contains extra records")
+
+    try:
+        response = json.loads(data[:-1])
+    except (json.JSONDecodeError, UnicodeError) as err:
+        raise SignalRHandshakeError("SignalR handshake is not valid JSON") from err
+
+    if not isinstance(response, dict):
+        raise SignalRHandshakeError("SignalR handshake response must be an object")
+    if response.get("error") is not None:
+        raise SignalRHandshakeError("SignalR handshake rejected by server")
+    if response:
+        raise SignalRHandshakeError("SignalR handshake response has unknown fields")
+
+
+def _sanitize_close_reason(value: Any) -> str:
+    """Return a bounded Close reason with credential-shaped values redacted."""
+    if not isinstance(value, str) or not value.strip():
+        return "server closed the SignalR connection"
+    reason = " ".join(value.split())
+    reason = re.sub(
+        r"(?i)\b(token|password|api[ _-]?key|authorization|bearer)\b\s*[:=]?\s*\S+",
+        r"\1=[redacted]",
+        reason,
+    )
+    return reason[:160]
 
 
 def encode_varint(value: int) -> bytes:
@@ -175,6 +227,37 @@ def extract_completions(data: bytes) -> list[CompletionMessage]:
             )
 
     return completions
+
+
+def extract_control_messages(data: bytes) -> tuple[int, list[CloseMessage]]:
+    """Return validated Ping and Close messages from framed hub data."""
+    ping_count = 0
+    closes: list[CloseMessage] = []
+
+    for message in decode_hub_messages(data):
+        if message[0] == MSG_TYPE_PING:
+            if len(message) != 1:
+                raise SignalRProtocolError("SignalR Ping message has unexpected fields")
+            ping_count += 1
+        elif message[0] == MSG_TYPE_CLOSE:
+            if len(message) > 3:
+                raise SignalRProtocolError("SignalR Close message has unexpected fields")
+            error = message[1] if len(message) >= 2 else None
+            allow_reconnect = message[2] if len(message) >= 3 else False
+            if error is not None and not isinstance(error, str):
+                raise SignalRProtocolError("SignalR Close reason must be a string")
+            if not isinstance(allow_reconnect, bool):
+                raise SignalRProtocolError(
+                    "SignalR Close allow-reconnect flag must be a boolean"
+                )
+            closes.append(
+                CloseMessage(
+                    reason=_sanitize_close_reason(error),
+                    allow_reconnect=allow_reconnect,
+                )
+            )
+
+    return ping_count, closes
 
 
 def encode_hub_message(message: list[Any]) -> bytes:
