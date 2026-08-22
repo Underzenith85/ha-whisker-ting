@@ -237,6 +237,27 @@ def test_event_history_is_scoped_classified_deduplicated_and_sorted() -> None:
     assert not hasattr(events[1], "statuses")
 
 
+@pytest.mark.parametrize(
+    ("event_type", "expected"),
+    [
+        ("CommunityPowerOutage", "power_outage"),
+        ("CommunityPowerRestored", "power_restored"),
+        ("Brownout", "voltage_sag"),
+        ("Surge", "voltage_swell"),
+        ("RecurringPowerQualityProblem", "power_quality_problem"),
+        ("RecurringPowerQualityProblemCleared", "power_quality_restored"),
+        ("NoGrounding", "no_grounding"),
+        ("GroundingRestored", "grounding_restored"),
+        ("UnrecognizedFutureValue", None),
+    ],
+)
+def test_event_type_classification_is_explicit(
+    event_type: str, expected: str | None
+) -> None:
+    """Only inventoried event types can affect durable condition entities."""
+    assert parsers.classify_event_type(event_type) == expected
+
+
 @pytest.mark.asyncio
 async def test_event_history_request_is_read_only_and_bounded() -> None:
     """History retrieval supplies a bounded date window and exclusion flags."""

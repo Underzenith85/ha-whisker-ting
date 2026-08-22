@@ -108,6 +108,8 @@ registry identity, and precise coordinates and street addresses are not exposed.
 | Last generator start/stop | Disabled | Newest matching generator transition timestamps |
 | Last voltage sag/swell | Disabled | Newest matching voltage excursion timestamps |
 | Last no-grounding warning | Disabled | Newest matching grounding-warning timestamp |
+| Last grounding restoration | Disabled | Newest explicit grounding-restoration timestamp |
+| Last power-quality problem/restoration | Disabled | Newest recurring power-quality transition timestamps |
 | Last high/low-temperature alert | Disabled | Newest matching temperature-alert timestamps |
 | Last fire/utility-fire event | Disabled | Newest matching fire-event timestamps |
 | Last device online/offline | Disabled | Newest matching device-connectivity timestamps |
@@ -119,6 +121,7 @@ registry identity, and precise coordinates and street addresses are not exposed.
 | Bluetooth MAC address | Disabled | Device Bluetooth address |
 | Serial number | Disabled | Ting serial number |
 | Group | Disabled | Ting account group name |
+| Voltage condition | Enabled | `sag` or `swell` from the newest explicit voltage event |
 
 ### Hazard status values
 
@@ -154,6 +157,18 @@ Only real-time voltage, frequency, and THD entities become unavailable when the 
 | Learning mode | Enabled | Device is learning the home's electrical environment |
 | HVAC verified | Disabled | Ting reports HVAC verification complete |
 | Is owner | Disabled | Account is marked as the device owner |
+| Power outage | Enabled | On after an outage event and off after an explicit restoration |
+| Generator running | Enabled | On after generator start and off after generator stop |
+| Recurring power-quality problem | Enabled | On until an explicit problem-cleared event |
+| No grounding | Enabled | On until an explicit grounding-restored event |
+| Device online | Enabled | Latest explicit device online/offline transition |
+
+Event-derived conditions may appear on a Ting sensor or site device according to
+the ownership ID supplied by Ting. They remain unknown until a recognized transition
+exists in the bounded notification-history window. An unknown future event never
+activates or clears a condition. Voltage sag and swell are represented as an enum and
+timestamps rather than a durable fault because the service data does not provide a
+corresponding normal transition.
 
 ## Latest-event attributes
 
