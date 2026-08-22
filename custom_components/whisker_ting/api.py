@@ -182,6 +182,26 @@ class WhiskerConnectionError(WhiskerApiError):
     """Connection error."""
 
 
+class WhiskerAuthorizationError(WhiskerApiError):
+    """The account is not authorized for an API resource."""
+
+
+class WhiskerNotFoundError(WhiskerApiError):
+    """An optional or removed API resource was not found."""
+
+
+class WhiskerRateLimitError(WhiskerApiError):
+    """The API temporarily rejected a request due to rate limiting."""
+
+
+class WhiskerServiceError(WhiskerApiError):
+    """The remote service temporarily failed."""
+
+
+class WhiskerInvalidResponseError(WhiskerApiError):
+    """The API returned a malformed successful response."""
+
+
 def _mapping(value: Any) -> dict[str, Any]:
     """Return a mapping or an empty mapping for missing/null/malformed values."""
     return value if isinstance(value, dict) else {}
@@ -404,42 +424,69 @@ class WhiskerApiClient:
     ) -> Any:
         """Make an authenticated request to the API."""
         token = await self._ensure_token()
-
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "x-wl-api-key": self._api_key or "",
-        }
-
         url = f"{API_BASE_URL}{endpoint}"
 
         try:
-            async with self._session.request(
-                method, url, headers=headers, **kwargs
-            ) as response:
-                if response.status == 401:
-                    # Token might have expired, try refreshing once
-                    async with self._lock:
-                        await self._authenticate()
-                    token = self._access_token
-                    headers["Authorization"] = f"Bearer {token}"
-                    async with self._session.request(
-                        method, url, headers=headers, **kwargs
-                    ) as retry_response:
-                        if retry_response.status == 401:
-                            raise WhiskerAuthError("Authentication failed")
-                        retry_response.raise_for_status()
-                        return await retry_response.json()
+            for attempt in range(2):
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                    "x-wl-api-key": self._api_key or "",
+                }
+                async with self._session.request(
+                    method, url, headers=headers, **kwargs
+                ) as response:
+                    if response.status == 401 and attempt == 0:
+                        token = await self._renew_after_unauthorized(token)
+                        continue
+                    self._raise_for_api_status(response.status)
+                    try:
+                        return await response.json()
+                    except (aiohttp.ContentTypeError, ValueError) as err:
+                        raise WhiskerInvalidResponseError(
+                            "API returned an invalid JSON response"
+                        ) from err
 
-                if response.status != 200:
-                    raise WhiskerApiError(
-                        f"API request failed with status {response.status}"
-                    )
+            raise WhiskerAuthError("Authentication failed")
+        except WhiskerApiError:
+            raise
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise WhiskerConnectionError("Unable to reach the Ting API") from err
 
-                return await response.json()
+    async def _renew_after_unauthorized(self, rejected_token: str) -> str:
+        """Renew credentials once after a rejected access token."""
+        async with self._lock:
+            if self._access_token and self._access_token != rejected_token:
+                return self._access_token
+            if self._refresh_token:
+                try:
+                    await self._refresh_access_token()
+                except WhiskerAuthError:
+                    if self._password is None:
+                        raise
+                    await self._authenticate()
+            else:
+                await self._authenticate()
+            if self._access_token is None:
+                raise WhiskerAuthError("Authentication failed")
+            return self._access_token
 
-        except aiohttp.ClientError as err:
-            raise WhiskerConnectionError(f"Connection error: {err}") from err
+    @staticmethod
+    def _raise_for_api_status(status: int) -> None:
+        """Raise a bounded exception for an unsuccessful API status."""
+        if 200 <= status < 300:
+            return
+        if status == 401:
+            raise WhiskerAuthError("Authentication failed")
+        if status == 403:
+            raise WhiskerAuthorizationError("API resource is not authorized")
+        if status == 404:
+            raise WhiskerNotFoundError("API resource was not found")
+        if status == 429:
+            raise WhiskerRateLimitError("API rate limit exceeded")
+        if 500 <= status < 600:
+            raise WhiskerServiceError("Ting API service is temporarily unavailable")
+        raise WhiskerApiError(f"API request failed with status {status}")
 
     async def get_user_data(self) -> UserData:
         """Get user data including devices."""
@@ -498,6 +545,8 @@ class WhiskerApiClient:
         """Fetch an optional feature endpoint without failing the main update."""
         try:
             return await self._request("GET", endpoint, **kwargs)
+        except WhiskerAuthError:
+            raise
         except WhiskerApiError as err:
             _LOGGER.debug("Optional Ting feature endpoint unavailable: %s", err)
             return None
@@ -741,5 +790,7 @@ class WhiskerApiClient:
         try:
             await self.get_user_data()
             return True
+        except (WhiskerAuthError, WhiskerConnectionError):
+            raise
         except WhiskerApiError:
             return False
