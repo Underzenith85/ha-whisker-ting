@@ -7,7 +7,7 @@ An unofficial Home Assistant integration for monitoring [Whisker Labs Ting](http
 > [!WARNING]
 > This is an independent community project. It is not created, maintained, affiliated with, authorized by, or endorsed by Whisker Labs, Inc. Ting and Whisker Labs are trademarks of their respective owner.
 
-The integration provides read-only access to Ting account, device, hazard, frozen-pipe, notification, and real-time voltage data.
+The integration provides read-only access to Ting account, device, hazard, frozen-pipe, notification, current-condition, and real-time electrical data. Integration version 1.1.0 is aligned with the Ting 3.0.4 service behavior.
 
 > [!IMPORTANT]
 > This integration is not currently published to HACS. Install it manually from this repository. Do not add it as a HACS custom repository yet.
@@ -16,7 +16,8 @@ The integration provides read-only access to Ting account, device, hazard, froze
 
 - AWS Cognito authentication with automatic access-token refresh
 - Multiple Ting devices under one account
-- Real-time voltage streaming over SignalR WebSockets
+- Real-time voltage, frequency, and total harmonic distortion (THD) streaming over SignalR WebSockets
+- Current site temperature and bounded outage-risk diagnostics
 - Explicit electrical-fire and power-quality hazard states
 - Frozen-pipe risk, temperature, location, and current-history data
 - Read-only notification history scoped to each device
@@ -52,7 +53,9 @@ One config entry represents one Ting account. Every supported device returned fo
 
 The REST polling interval can be configured from the integration options. Valid values are 30–3600 seconds, with a default of 60 seconds.
 
-Real-time voltage is delivered separately over a WebSocket and is not limited by the REST polling interval. Entity updates from the high-frequency stream are published to Home Assistant at most once per second.
+Real-time voltage, frequency, and THD are delivered separately over a WebSocket and are not limited by the REST polling interval. Entity updates from the high-frequency streams are published to Home Assistant at most once per second.
+
+Current temperature, outage risk, hazard state, and other device conditions are refreshed through the configured REST polling interval.
 
 ## Entities
 
@@ -66,6 +69,10 @@ Some diagnostic entities are disabled by default and can be enabled from the dev
 | Voltage high | Enabled | High value from the latest voltage sample |
 | Voltage low | Enabled | Low value from the latest voltage sample |
 | Average peaks max | Disabled | Average peak value from the stream |
+| Frequency | Enabled | Latest real-time line-frequency reading |
+| THD minimum | Disabled | Latest minimum total harmonic distortion reading |
+| THD average | Enabled | Latest average total harmonic distortion reading |
+| THD maximum | Disabled | Latest maximum total harmonic distortion reading |
 | Hazard status | Enabled | Normalized overall hazard state |
 | Hazard message | Enabled | Account-provided overall hazard message |
 | Electrical fire hazard status | Enabled | Raw modeled EFH status |
@@ -75,6 +82,8 @@ Some diagnostic entities are disabled by default and can be enabled from the dev
 | Unverified fire hazard message | Enabled | UFH status message |
 | Frozen pipe risk level | Enabled | Detailed frozen-pipe risk level when supported |
 | Frozen pipe outdoor temperature | Disabled | Outdoor temperature associated with frozen-pipe evaluation |
+| Current outdoor temperature | Enabled | Current site temperature from the Ting conditions snapshot |
+| Current outage risk | Disabled | Bounded site-level outage-risk status and diagnostic attributes |
 | Frozen pipe detected location | Disabled | Conditioned, unconditioned, or unknown-space classification |
 | Frozen pipe last event | Disabled | Latest modeled frozen-pipe event timestamp |
 | Latest event | Enabled | Latest read-only Ting notification for the device |
@@ -108,7 +117,7 @@ Hazards are derived from explicit Ting EFH and UFH status values. A positive num
 - `not_receiving` — no data has arrived for approximately ten seconds and reconnection is attempted
 - `stopped` — the stream was intentionally stopped
 
-Only real-time voltage entities become unavailable when the stream is no longer receiving data. REST-backed hazard and diagnostic entities remain available while REST updates continue succeeding.
+Only real-time voltage, frequency, and THD entities become unavailable when the stream is no longer receiving data. REST-backed hazard and diagnostic entities remain available while REST updates continue succeeding.
 
 ### Binary sensors
 
@@ -146,9 +155,9 @@ Notification history is read-only. The integration does not acknowledge, clear, 
 
 ## Troubleshooting
 
-### Voltage is unknown after startup
+### Real-time electrical data is unknown after startup
 
-The integration waits for the SignalR connection, subscription acknowledgement, and first valid data packet. Check the stream-health sensor if voltage remains unknown.
+The integration waits for the SignalR connection, subscription acknowledgement, and first valid data packet. Voltage uses the primary stream; frequency and THD use optional secondary streams and can remain unknown when those streams are unavailable for an account. Check the stream-health sensor if voltage remains unknown.
 
 ### Stream health is delayed or not receiving
 
@@ -158,7 +167,7 @@ Confirm that the Ting device is online and the Home Assistant host can reach Tin
 
 Use the same email address and password used by the Ting application. If the refresh token is rejected, Home Assistant starts a reauthentication flow so the account can be connected again.
 
-### Frozen-pipe or event entities are unknown
+### Temperature, outage-risk, frozen-pipe, or event entities are unknown
 
 These are optional account/device capabilities. Unsupported or unauthorized optional endpoints do not prevent the rest of the integration from loading.
 
