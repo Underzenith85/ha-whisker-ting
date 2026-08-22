@@ -337,3 +337,69 @@ def test_disconnect_cancels_tasks_and_closes_socket() -> None:
         assert client._stale_check_task is None
 
     asyncio.run(scenario())
+
+
+def test_disconnect_unsubscribes_initialized_stream_before_close() -> None:
+    """Intentional shutdown releases the station subscription first."""
+
+    async def scenario() -> None:
+        client, transport = _client()
+        client._subscribed = True
+        client._invoke = AsyncMock(return_value=None)
+        client._receive_task = asyncio.create_task(asyncio.sleep(60))
+
+        await client.disconnect()
+
+        client._invoke.assert_awaited_once_with(
+            "UnInitializeStreaming",
+            [
+                {"StationId": "ABC123", "DataElement": "ComboBinaryData"},
+                "api-key",
+                "42",
+            ],
+            timeout=client.UNSUBSCRIBE_TIMEOUT,
+        )
+        assert transport.closed
+        assert not client._subscribed
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        websocket.SignalRInvocationError("rejected by server"),
+        websocket.SignalRInvocationError("timed out"),
+    ],
+)
+def test_disconnect_closes_transport_when_unsubscribe_fails(error: Exception) -> None:
+    """Server errors and timeouts cannot block transport cleanup."""
+
+    async def scenario() -> None:
+        client, transport = _client()
+        client._subscribed = True
+        client._invoke = AsyncMock(side_effect=error)
+
+        await client.disconnect()
+
+        assert transport.closed
+        assert client._ws is None
+        assert not client._subscribed
+
+    asyncio.run(scenario())
+
+
+def test_disconnect_without_subscription_is_idempotent() -> None:
+    """Uninitialized and repeated shutdowns never invoke server teardown."""
+
+    async def scenario() -> None:
+        client, transport = _client()
+        client._invoke = AsyncMock()
+
+        await client.disconnect()
+        await client.disconnect()
+
+        client._invoke.assert_not_awaited()
+        assert transport.closed
+
+    asyncio.run(scenario())
