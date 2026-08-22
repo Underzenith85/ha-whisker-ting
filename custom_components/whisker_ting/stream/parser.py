@@ -7,7 +7,7 @@ import math
 from datetime import UTC, datetime
 from typing import Any
 
-from .models import PowerQualityData, VoltageData
+from .models import PowerQualityCategory, PowerQualityData, VoltageData
 from .signalr import (
     SignalRProtocolError,
     extract_categorical_payloads,
@@ -16,7 +16,7 @@ from .signalr import (
 
 _LOGGER = logging.getLogger(__name__)
 
-SECONDARY_DATA_ELEMENTS = ("frequency", "thdMin", "thdAvg", "thdMax")
+SECONDARY_DATA_ELEMENTS = tuple(category.value for category in PowerQualityCategory)
 
 
 def parse_timestamp(value: Any) -> datetime:
@@ -79,10 +79,8 @@ def decode_power_quality_data(data: bytes) -> list[PowerQualityData]:
     readings: list[PowerQualityData] = []
     for payload in payloads:
         try:
-            category = payload["Category"]
+            category = PowerQualityCategory(payload["Category"])
             value = float(payload["Value"])
-            if category not in SECONDARY_DATA_ELEMENTS:
-                continue
             if not math.isfinite(value):
                 raise ValueError("non-finite power-quality value")
             readings.append(

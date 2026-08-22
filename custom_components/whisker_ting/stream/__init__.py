@@ -2,10 +2,17 @@
 
 from .client import SignalRInvocationError, WhiskerWebSocket
 from .manager import WhiskerWebSocketManager
-from .models import PowerQualityData, StationState, StreamHealth, VoltageData
+from .models import (
+    PowerQualityCategory,
+    PowerQualityData,
+    StationState,
+    StreamHealth,
+    VoltageData,
+)
 
 __all__ = [
     "PowerQualityData",
+    "PowerQualityCategory",
     "SignalRInvocationError",
     "StationState",
     "StreamHealth",

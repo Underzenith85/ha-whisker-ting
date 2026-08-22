@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 
 @dataclass
@@ -42,6 +42,52 @@ class VoltageReading:
     thd_min_percent: float | None = None
     thd_avg_percent: float | None = None
     thd_max_percent: float | None = None
+
+    @property
+    def has_live_data(self) -> bool:
+        """Return whether any real-time metric has been populated."""
+        return self.voltage > 0 or any(
+            value is not None
+            for value in (
+                self.frequency_hz,
+                self.thd_min_percent,
+                self.thd_avg_percent,
+                self.thd_max_percent,
+            )
+        )
+
+    def with_voltage(
+        self,
+        *,
+        voltage: float,
+        voltage_hi: float,
+        voltage_lo: float,
+        average_peaks_max: float,
+    ) -> VoltageReading:
+        """Return a copy with a new primary voltage sample."""
+        return replace(
+            self,
+            voltage=voltage,
+            voltage_hi=voltage_hi,
+            voltage_lo=voltage_lo,
+            average_peaks_max=average_peaks_max,
+        )
+
+    def with_frequency(self, value: float) -> VoltageReading:
+        """Return a copy with a new frequency sample."""
+        return replace(self, frequency_hz=value)
+
+    def with_thd_min(self, value: float) -> VoltageReading:
+        """Return a copy with a new minimum THD sample."""
+        return replace(self, thd_min_percent=value)
+
+    def with_thd_average(self, value: float) -> VoltageReading:
+        """Return a copy with a new average THD sample."""
+        return replace(self, thd_avg_percent=value)
+
+    def with_thd_max(self, value: float) -> VoltageReading:
+        """Return a copy with a new maximum THD sample."""
+        return replace(self, thd_max_percent=value)
 
 
 @dataclass

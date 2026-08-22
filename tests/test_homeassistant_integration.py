@@ -37,7 +37,11 @@ from custom_components.whisker_ting.coordinator import (
     WhiskerDataUpdateCoordinator,
 )
 from custom_components.whisker_ting.sensor import SENSOR_DESCRIPTIONS, WhiskerSensor
-from custom_components.whisker_ting.stream import VoltageData
+from custom_components.whisker_ting.stream import (
+    PowerQualityCategory,
+    PowerQualityData,
+    VoltageData,
+)
 
 
 @pytest.mark.asyncio
@@ -197,6 +201,7 @@ async def test_coordinator_connects_stream_once_and_disconnects_on_shutdown(
     manager.wait_for_data = AsyncMock(return_value=False)
     manager.get_voltage_data.return_value = None
     manager.disconnect_all = AsyncMock()
+    manager.disconnect_all = AsyncMock()
     manager.is_station_managed.side_effect = [False, True, True, True]
 
     with patch(
@@ -258,3 +263,53 @@ async def test_voltage_listener_updates_are_throttled_to_one_hz(
     await asyncio.sleep(coordinator.STREAM_UPDATE_INTERVAL + 0.05)
     assert coordinator.async_set_updated_data.call_count == 2
     await coordinator.async_shutdown()
+
+
+@pytest.mark.asyncio
+async def test_interleaved_live_metrics_survive_rest_refresh(
+    hass: HomeAssistant,
+) -> None:
+    """Typed voltage and power-quality samples merge across a REST snapshot."""
+    first = DeviceState(
+        "SERIAL-001", "Fixture device", "FireSensor", 1, station_id="SERIAL-001"
+    )
+    refreshed = DeviceState(
+        "SERIAL-001", "Fixture device", "FireSensor", 1, station_id="SERIAL-001"
+    )
+    client = MagicMock(api_key="fixture-api-key", user_id=42)
+    client.get_all_device_states = AsyncMock(
+        side_effect=[{first.serial_number: first}, {refreshed.serial_number: refreshed}]
+    )
+    client.get_frozen_pipe_data = AsyncMock(return_value=FrozenPipeData())
+    client.get_event_history = AsyncMock(return_value=[])
+    manager = MagicMock()
+    manager.is_station_managed.return_value = True
+    manager.wait_for_data = AsyncMock(return_value=False)
+    manager.get_voltage_data.return_value = None
+    manager.disconnect_all = AsyncMock()
+
+    with patch(
+        "custom_components.whisker_ting.coordinator.WhiskerWebSocketManager",
+        return_value=manager,
+    ):
+        coordinator = WhiskerDataUpdateCoordinator(hass, client, MagicMock())
+        coordinator.data = await coordinator._async_update_data()
+        coordinator._handle_voltage_update(
+            "SERIAL-001", VoltageData(datetime.now(UTC), 120, 121, 119, 4)
+        )
+        coordinator._handle_power_quality_update(
+            "SERIAL-001",
+            PowerQualityData(datetime.now(UTC), PowerQualityCategory.FREQUENCY, 60.01),
+        )
+        coordinator._handle_power_quality_update(
+            "SERIAL-001",
+            PowerQualityData(datetime.now(UTC), PowerQualityCategory.THD_AVERAGE, 2.4),
+        )
+
+        result = await coordinator._async_update_data()
+        await coordinator.async_shutdown()
+
+    reading = result["SERIAL-001"].voltage
+    assert reading.voltage == 120
+    assert reading.frequency_hz == 60.01
+    assert reading.thd_avg_percent == 2.4

@@ -14,13 +14,13 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import (
     DeviceState,
-    VoltageReading,
     WhiskerApiClient,
     WhiskerApiError,
     WhiskerAuthError,
 )
 from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
 from .stream import (
+    PowerQualityCategory,
     PowerQualityData,
     StreamHealth,
     VoltageData,
@@ -125,15 +125,11 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
         for device_id, device_state in self.data.items():
             if device_state.station_id == station_id:
                 # Update the voltage reading
-                device_state.voltage = VoltageReading(
+                device_state.voltage = device_state.voltage.with_voltage(
                     voltage=voltage_data.voltage,
                     voltage_hi=voltage_data.voltage_hi,
                     voltage_lo=voltage_data.voltage_lo,
                     average_peaks_max=voltage_data.average_peaks_max,
-                    frequency_hz=device_state.voltage.frequency_hz,
-                    thd_min_percent=device_state.voltage.thd_min_percent,
-                    thd_avg_percent=device_state.voltage.thd_avg_percent,
-                    thd_max_percent=device_state.voltage.thd_max_percent,
                 )
                 self._schedule_stream_listener_update()
                 break
@@ -145,18 +141,17 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
         """Store a Ting 3.0.4 secondary power-quality stream reading."""
         if self.data is None:
             return
-        fields = {
-            "frequency": "frequency_hz",
-            "thdMin": "thd_min_percent",
-            "thdAvg": "thd_avg_percent",
-            "thdMax": "thd_max_percent",
-        }
-        field = fields.get(reading.category)
-        if field is None:
-            return
         for device in self.data.values():
             if device.station_id == station_id:
-                setattr(device.voltage, field, reading.value)
+                match reading.category:
+                    case PowerQualityCategory.FREQUENCY:
+                        device.voltage = device.voltage.with_frequency(reading.value)
+                    case PowerQualityCategory.THD_MIN:
+                        device.voltage = device.voltage.with_thd_min(reading.value)
+                    case PowerQualityCategory.THD_AVERAGE:
+                        device.voltage = device.voltage.with_thd_average(reading.value)
+                    case PowerQualityCategory.THD_MAX:
+                        device.voltage = device.voltage.with_thd_max(reading.value)
                 self._schedule_stream_listener_update()
                 break
 
@@ -249,7 +244,7 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
             if self.data:
                 for device_id, device_state in data.items():
                     existing = self.data.get(device_id)
-                    if existing and existing.voltage.voltage > 0:
+                    if existing and existing.voltage.has_live_data:
                         device_state.voltage = existing.voltage
 
             if self._last_update_success is False:
@@ -275,15 +270,11 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
                             device_state.station_id
                         )
                         if voltage_data:
-                            device_state.voltage = VoltageReading(
+                            device_state.voltage = device_state.voltage.with_voltage(
                                 voltage=voltage_data.voltage,
                                 voltage_hi=voltage_data.voltage_hi,
                                 voltage_lo=voltage_data.voltage_lo,
                                 average_peaks_max=voltage_data.average_peaks_max,
-                                frequency_hz=device_state.voltage.frequency_hz,
-                                thd_min_percent=device_state.voltage.thd_min_percent,
-                                thd_avg_percent=device_state.voltage.thd_avg_percent,
-                                thd_max_percent=device_state.voltage.thd_max_percent,
                             )
 
             return data

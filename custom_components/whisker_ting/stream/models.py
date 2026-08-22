@@ -7,6 +7,15 @@ from datetime import datetime
 from enum import StrEnum
 
 
+class PowerQualityCategory(StrEnum):
+    """Supported categorical metrics in the Ting secondary stream."""
+
+    FREQUENCY = "frequency"
+    THD_MIN = "thdMin"
+    THD_AVERAGE = "thdAvg"
+    THD_MAX = "thdMax"
+
+
 @dataclass(frozen=True)
 class VoltageData:
     """Represent one real-time voltage reading."""
@@ -23,7 +32,7 @@ class PowerQualityData:
     """Represent one categorical power-quality reading."""
 
     timestamp: datetime
-    category: str
+    category: PowerQualityCategory
     value: float
 
 
