@@ -43,18 +43,15 @@ BINARY_SENSOR_DESCRIPTIONS: tuple[WhiskerBinarySensorEntityDescription, ...] = (
         key="electrical_fire_hazard",
         translation_key="electrical_fire_hazard",
         device_class=BinarySensorDeviceClass.SAFETY,
-        value_fn=lambda state: (
-            state.fire_hazard_status.efh_status.level is not None
-            and state.fire_hazard_status.efh_status.level > 0
-        ),
+        value_fn=lambda state: state.fire_hazard_status.efh_status.status
+        in {"ElevatedSuspicious", "PossibleFire", "HazardFound"},
     ),
     WhiskerBinarySensorEntityDescription(
         key="unverified_fire_hazard",
         translation_key="unverified_fire_hazard",
         device_class=BinarySensorDeviceClass.SAFETY,
         value_fn=lambda state: (
-            state.fire_hazard_status.ufh_status.level is not None
-            and state.fire_hazard_status.ufh_status.level > 0
+            state.fire_hazard_status.ufh_status.status == "PowerQualityHazard"
         ),
     ),
     WhiskerBinarySensorEntityDescription(

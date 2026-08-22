@@ -40,6 +40,7 @@ class FireHazardStatus:
     """Represents the fire hazard status of a device."""
 
     learning_mode: bool = False
+    hazard_severity_level: int | None = None
     message: str = "No Hazards Detected"
     efh_status: HazardStatus = field(default_factory=HazardStatus)
     ufh_status: HazardStatus = field(default_factory=HazardStatus)
@@ -628,6 +629,9 @@ class WhiskerApiClient:
 
         fire_hazard_status = FireHazardStatus(
             learning_mode=_boolean(fhs_data.get("learningMode")),
+            hazard_severity_level=_optional_integer(
+                fhs_data.get("hazardSeverityLevel")
+            ),
             message=_string(fhs_data.get("message"), "No Hazards Detected"),
             efh_status=efh_status,
             ufh_status=ufh_status,

@@ -93,8 +93,17 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
         key="hazard_status",
         translation_key="hazard_status",
         device_class=SensorDeviceClass.ENUM,
-        options=["no_hazards", "hazard_detected", "reviewed_not_fire", "learning"],
+        options=[
+            "no_hazards",
+            "fire_hazard",
+            "power_quality_hazard",
+            "elevated_suspicious",
+            "reviewed_not_fire",
+            "learning",
+            "unknown",
+        ],
         value_fn=lambda state: _get_hazard_status(state),
+        attributes_fn=lambda state: _hazard_attributes(state),
     ),
     WhiskerSensorEntityDescription(
         key="hazard_message",
@@ -181,6 +190,13 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
         options=["receiving", "delayed", "not_receiving", "stopped"],
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda state: state.stream_health,
+    ),
+    WhiskerSensorEntityDescription(
+        key="hazard_severity_level",
+        translation_key="hazard_severity_level",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda state: state.fire_hazard_status.hazard_severity_level,
     ),
     WhiskerSensorEntityDescription(
         key="device_type",
@@ -272,16 +288,35 @@ def _get_hazard_status(state: DeviceState) -> str:
     if state.fire_hazard_status.learning_mode:
         return "learning"
     if state.is_fire:
-        return "hazard_detected"
+        return "fire_hazard"
     efh = state.fire_hazard_status.efh_status
+    ufh = state.fire_hazard_status.ufh_status
+    if efh.status in {"PossibleFire", "HazardFound"}:
+        return "fire_hazard"
+    if ufh.status == "PowerQualityHazard":
+        return "power_quality_hazard"
+    if efh.status == "ElevatedSuspicious":
+        return "elevated_suspicious"
     if efh.status == "ReviewedNotFire":
         return "reviewed_not_fire"
-    if efh.level is not None and efh.level > 0:
-        return "hazard_detected"
-    ufh = state.fire_hazard_status.ufh_status
-    if ufh.level is not None and ufh.level > 0:
-        return "hazard_detected"
-    return "no_hazards"
+    known_normal = {None, "", "None", "NoHazard", "NoHazards", "Normal"}
+    if efh.status in known_normal and ufh.status in known_normal:
+        return "no_hazards"
+    return "unknown"
+
+
+def _hazard_attributes(state: DeviceState) -> dict[str, Any]:
+    """Return modeled status details without retaining the raw response."""
+    hazard = state.fire_hazard_status
+    return {
+        "severity_level": hazard.hazard_severity_level,
+        "efh_status": hazard.efh_status.status,
+        "efh_level": hazard.efh_status.level,
+        "efh_timestamp": hazard.efh_status.timestamp_utc,
+        "ufh_status": hazard.ufh_status.status,
+        "ufh_level": hazard.ufh_status.level,
+        "ufh_timestamp": hazard.ufh_status.timestamp_utc,
+    }
 
 
 async def async_setup_entry(
