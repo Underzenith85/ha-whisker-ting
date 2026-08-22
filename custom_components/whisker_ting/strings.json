@@ -50,7 +50,7 @@
         "name": "Electrical Fire Hazard"
       },
       "unverified_fire_hazard": {
-        "name": "Unverified Fire Hazard"
+        "name": "Power Quality Hazard"
       },
       "frozen_pipe": {
         "name": "Frozen Pipe Risk"
@@ -70,9 +70,12 @@
         "name": "Hazard Status",
         "state": {
           "no_hazards": "No Hazards",
-          "hazard_detected": "Hazard Detected",
+          "fire_hazard": "Fire Hazard",
+          "power_quality_hazard": "Power Quality Hazard",
+          "elevated_suspicious": "Elevated Suspicious Activity",
           "reviewed_not_fire": "Reviewed - Not Fire",
-          "learning": "Learning"
+          "learning": "Learning",
+          "unknown": "Unknown"
         }
       },
       "hazard_message": {
@@ -116,6 +119,9 @@
       },
       "latest_event": {
         "name": "Latest Event"
+      },
+      "hazard_severity_level": {
+        "name": "Hazard Severity Level"
       },
       "device_type": {
         "name": "Device Type"

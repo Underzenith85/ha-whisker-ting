@@ -38,6 +38,7 @@ def test_parses_normal_learning_efh_ufh_and_multiple_records() -> None:
     by_serial = {device.serial_number: device for device in result.devices}
 
     assert not by_serial["NORMAL-001"].is_fire
+    assert by_serial["NORMAL-001"].fire_hazard_status.hazard_severity_level == 4
     assert by_serial["NORMAL-001"].group_name == "Home"
     assert by_serial["LEARNING-002"].fire_hazard_status.learning_mode
     assert by_serial["EFH-003"].fire_hazard_status.efh_status.level == 2

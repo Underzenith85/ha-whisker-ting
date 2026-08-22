@@ -18,6 +18,7 @@
       "group": {"id": 10, "name": "Home"},
       "fireHazardStatus": {
         "learningMode": false,
+        "hazardSeverityLevel": 4,
         "message": "No Hazards Detected",
         "efhStatus": {"status": null, "level": 0},
         "ufhStatus": {"status": null, "level": 0}
