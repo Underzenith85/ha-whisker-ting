@@ -10,6 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import WhiskerApiClient, WhiskerAuthError, WhiskerConnectionError
@@ -21,8 +22,10 @@ from .const import (
     CONF_USER_ID,
     CONF_USERNAME,
     DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
 )
 from .coordinator import WhiskerDataUpdateCoordinator
+from .history import async_register_history_service
 from .repairs import WhiskerRepairManager
 
 if TYPE_CHECKING:
@@ -35,6 +38,13 @@ else:
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.SENSOR]
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Set up integration-wide services."""
+    async_register_history_service(hass)
+    return True
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

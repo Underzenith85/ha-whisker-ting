@@ -22,6 +22,7 @@ from .models import (
     Site,
     TingEvent,
     UserData,
+    VoltageHistoryPoint,
     VoltageReading,
 )
 
@@ -36,6 +37,7 @@ __all__ = [
     "Site",
     "TingEvent",
     "UserData",
+    "VoltageHistoryPoint",
     "VoltageReading",
     "WhiskerApiClient",
     "WhiskerApiError",

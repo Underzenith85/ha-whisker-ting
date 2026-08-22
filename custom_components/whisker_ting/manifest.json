@@ -1,6 +1,7 @@
 {
   "domain": "whisker_ting",
   "name": "Whisker Ting",
+  "after_dependencies": ["recorder"],
   "codeowners": ["@Underzenith85"],
   "config_flow": true,
   "dependencies": [],

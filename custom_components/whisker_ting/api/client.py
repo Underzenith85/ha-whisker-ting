@@ -18,6 +18,7 @@ from ..const import (
     API_NOTIFICATION_HISTORY_ENDPOINT,
     API_USER_CONDITIONS_ENDPOINT,
     API_USERS_ENDPOINT,
+    API_VOLTAGE_HISTORY_ENDPOINT,
 )
 from .errors import (
     WhiskerApiError,
@@ -36,6 +37,7 @@ from .models import (
     Site,
     TingEvent,
     UserData,
+    VoltageHistoryPoint,
 )
 from .parsers import (
     parse_conditions,
@@ -43,6 +45,7 @@ from .parsers import (
     parse_frozen_pipe_history,
     parse_frozen_pipe_record,
     parse_user_data,
+    parse_voltage_history,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -296,6 +299,29 @@ class WhiskerApiClient:
             },
         )
         return parse_event_history(data)
+
+    async def get_voltage_history(
+        self, serial_number: str, start: datetime, end: datetime
+    ) -> list[VoltageHistoryPoint]:
+        """Get one explicitly bounded v3 voltage-history window."""
+        if start.tzinfo is None or end.tzinfo is None or start >= end:
+            raise ValueError(
+                "Voltage history requires an ordered, timezone-aware window"
+            )
+        if end - start > timedelta(hours=24):
+            raise ValueError("A voltage history request cannot exceed 24 hours")
+        endpoint = API_VOLTAGE_HISTORY_ENDPOINT.format(
+            serial_number=quote(serial_number, safe="")
+        )
+        data = await self._request(
+            "GET",
+            endpoint,
+            params={
+                "startUtc": start.astimezone(UTC).isoformat(),
+                "endUtc": end.astimezone(UTC).isoformat(),
+            },
+        )
+        return parse_voltage_history(data)
 
     async def _get_optional_data(
         self, endpoint: str, *, capability: str | None = None, **kwargs: Any
