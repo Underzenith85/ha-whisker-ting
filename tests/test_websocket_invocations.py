@@ -403,3 +403,60 @@ def test_disconnect_without_subscription_is_idempotent() -> None:
         assert transport.closed
 
     asyncio.run(scenario())
+
+
+def test_stream_health_uses_staged_thresholds_with_controllable_clock() -> None:
+    """Five and ten second thresholds produce delayed then unavailable states."""
+
+    async def scenario() -> None:
+        health: list[websocket.StreamHealth] = []
+        clock_values = iter([6.0, 10.0])
+        client, _ = _client()
+        client._health = websocket.StreamHealth.RECEIVING
+        client._last_data_monotonic = 0.0
+        client._monotonic = lambda: next(clock_values)
+        client._on_health_update = lambda station, value: health.append(value)
+
+        with patch.object(websocket.asyncio, "sleep", AsyncMock()):
+            await client._stale_data_check_loop()
+
+        assert health == [
+            websocket.StreamHealth.DELAYED,
+            websocket.StreamHealth.NOT_RECEIVING,
+        ]
+        assert not client.connected
+
+    asyncio.run(scenario())
+
+
+def test_delayed_stream_retains_last_reading_and_availability() -> None:
+    """Delayed data remains usable until the not-receiving threshold."""
+    availability: list[bool] = []
+    health: list[websocket.StreamHealth] = []
+    manager = websocket.WhiskerWebSocketManager(
+        object(),
+        on_availability_update=lambda station, value: availability.append(value),
+        on_health_update=lambda station, value: health.append(value),
+    )
+    manager._station_states["ABC123"] = websocket.StationState(
+        connected=True,
+        subscribed=True,
+        live=True,
+        health=websocket.StreamHealth.RECEIVING,
+    )
+    reading = websocket.VoltageData(datetime.now(UTC), 120, 121, 119, 4)
+    manager._voltage_data["ABC123"] = reading
+
+    manager._handle_health_update("ABC123", websocket.StreamHealth.DELAYED)
+
+    assert manager.is_station_available("ABC123")
+    assert manager.get_voltage_data("ABC123") is reading
+    assert availability == []
+    assert health == [websocket.StreamHealth.DELAYED]
+
+    manager._handle_health_update("ABC123", websocket.StreamHealth.NOT_RECEIVING)
+
+    assert not manager.is_station_available("ABC123")
+    assert manager.get_voltage_data("ABC123") is reading
+    assert availability == [False]
+    assert health[-1] is websocket.StreamHealth.NOT_RECEIVING

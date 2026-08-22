@@ -105,6 +105,15 @@
       "frozen_pipe_last_event": {
         "name": "Frozen Pipe Last Event"
       },
+      "stream_health": {
+        "name": "Stream Health",
+        "state": {
+          "receiving": "Receiving",
+          "delayed": "Delayed",
+          "not_receiving": "Not Receiving",
+          "stopped": "Stopped"
+        }
+      },
       "device_type": {
         "name": "Device Type"
       },
