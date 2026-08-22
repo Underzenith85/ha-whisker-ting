@@ -1,4 +1,4 @@
-"""Offline tests for Cognito token lifecycle handling."""
+"""Offline tests for validated Cognito token lifecycle handling."""
 
 from __future__ import annotations
 
@@ -68,9 +68,7 @@ def test_full_auth_uses_cognito_expiry_and_utc(expires_in: int) -> None:
         assert client._token_expiry is not None
         assert client._token_expiry.tzinfo is UTC
         assert before + timedelta(seconds=expires_in) <= client._token_expiry
-        assert client._token_expiry <= datetime.now(UTC) + timedelta(
-            seconds=expires_in
-        )
+        assert client._token_expiry <= datetime.now(UTC) + timedelta(seconds=expires_in)
 
     asyncio.run(scenario())
 
