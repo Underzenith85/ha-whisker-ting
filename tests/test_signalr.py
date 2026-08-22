@@ -10,10 +10,7 @@ import msgpack
 import pytest
 
 SIGNALR_PATH = (
-    Path(__file__).parents[1]
-    / "custom_components"
-    / "whisker_ting"
-    / "signalr.py"
+    Path(__file__).parents[1] / "custom_components" / "whisker_ting" / "signalr.py"
 )
 
 
@@ -108,3 +105,83 @@ def test_frame_message_uses_multibyte_length() -> None:
 
     assert frame[:2] == b"\x80\x01"
     assert frame[2:] == payload
+
+
+def _voltage_invocation(**overrides: object) -> list[object]:
+    """Build a Ting voltage Invocation message."""
+    payload = {
+        "DataTimeUtc": "2026-08-21T20:30:00Z",
+        "Voltage": 121.25,
+        "VoltageHi": 122.5,
+        "VoltageLo": 119.75,
+        "AveragePeaksMax": 4.5,
+    }
+    payload.update(overrides)
+    return [1, {}, None, "updateComboBinaryData", [payload]]
+
+
+def test_decode_hub_messages_handles_coalesced_frames() -> None:
+    """One WebSocket payload may contain more than one SignalR frame."""
+    ping = signalr.encode_hub_message([6])
+    invocation = signalr.encode_hub_message(_voltage_invocation())
+
+    assert signalr.decode_hub_messages(ping + invocation) == [
+        [6],
+        _voltage_invocation(),
+    ]
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b"\x80",
+        b"\x05\x91\x06",
+        b"\x01\xc1",
+        b"\x01\x80",
+        b"\xff\xff\xff\xff\x08",
+    ],
+)
+def test_decode_hub_messages_rejects_malformed_frames(data: bytes) -> None:
+    """Malformed and truncated frames fail without leaking decoder errors."""
+    with pytest.raises(signalr.SignalRProtocolError):
+        signalr.decode_hub_messages(data)
+
+
+def test_extract_invocation_payload_uses_named_fields() -> None:
+    """Payload objects retain their field names regardless of map ordering."""
+    message = _voltage_invocation(
+        AveragePeaksMax=5.25,
+        VoltageLo=118.0,
+        Voltage=120.5,
+        VoltageHi=123.0,
+    )
+    frame = signalr.encode_hub_message(message)
+
+    assert signalr.extract_invocation_payloads(frame, "updateComboBinaryData") == [
+        message[4][0]
+    ]
+
+
+def test_extract_invocation_payload_ignores_unknown_messages() -> None:
+    """Unrelated message types and Invocation targets are ignored."""
+    frames = b"".join(
+        [
+            signalr.encode_hub_message([6]),
+            signalr.encode_hub_message([1, {}, None, "otherTarget", [{}]]),
+        ]
+    )
+
+    assert signalr.extract_invocation_payloads(frames, "updateComboBinaryData") == []
+
+
+def test_extract_invocation_payload_decodes_nested_messagepack() -> None:
+    """Binary invocation arguments are decoded as nested MessagePack objects."""
+    payload = _voltage_invocation()[4][0]
+    nested_payload = msgpack.packb(payload, use_bin_type=True)
+    frame = signalr.encode_hub_message(
+        [1, {}, None, "updateComboBinaryData", [nested_payload]]
+    )
+
+    assert signalr.extract_invocation_payloads(frame, "updateComboBinaryData") == [
+        payload
+    ]
