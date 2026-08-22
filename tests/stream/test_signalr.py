@@ -11,7 +11,11 @@ import msgpack
 import pytest
 
 SIGNALR_PATH = (
-    Path(__file__).parents[1] / "custom_components" / "whisker_ting" / "signalr.py"
+    Path(__file__).parents[2]
+    / "custom_components"
+    / "whisker_ting"
+    / "stream"
+    / "signalr.py"
 )
 
 

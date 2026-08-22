@@ -1,4 +1,4 @@
-"""Offline tests for SignalR invocation correlation."""
+"""Offline tests for station clients and multi-station management."""
 
 from __future__ import annotations
 
@@ -9,7 +9,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.whisker_ting import signalr, websocket
+from custom_components.whisker_ting.stream import client as websocket
+from custom_components.whisker_ting.stream import manager as stream_manager
+from custom_components.whisker_ting.stream import signalr
 
 
 class FakeMessage:
@@ -251,7 +253,7 @@ def test_close_transitions_and_notifies_exactly_once() -> None:
 
 def test_server_close_can_disable_manager_reconnect() -> None:
     """The manager honors the structured Close allow-reconnect flag."""
-    manager = websocket.WhiskerWebSocketManager(object())
+    manager = stream_manager.WhiskerWebSocketManager(object())
     manager._connections["ABC123"] = object()
 
     manager._handle_disconnect("ABC123", "server closed the SignalR connection", False)
@@ -264,7 +266,7 @@ def test_manager_reconnect_uses_exponential_backoff() -> None:
     """Reconnect attempts are throttled and replace the disconnected client."""
 
     async def scenario() -> None:
-        manager = websocket.WhiskerWebSocketManager(object())
+        manager = stream_manager.WhiskerWebSocketManager(object())
         manager._credentials["ABC123"] = {"api_key": "fixture-key", "user_id": 42}
         manager._reconnect_attempts["ABC123"] = 2
         replacement = MagicMock()
@@ -272,9 +274,9 @@ def test_manager_reconnect_uses_exponential_backoff() -> None:
         sleep = AsyncMock()
 
         with (
-            patch.object(websocket.asyncio, "sleep", sleep),
-            patch.object(websocket.random, "uniform", return_value=2),
-            patch.object(websocket, "WhiskerWebSocket", return_value=replacement),
+            patch.object(stream_manager.asyncio, "sleep", sleep),
+            patch.object(stream_manager.random, "uniform", return_value=2),
+            patch.object(stream_manager, "WhiskerWebSocket", return_value=replacement),
         ):
             manager._handle_disconnect("ABC123", "transport closed", True)
             await manager._reconnect_tasks["ABC123"]
@@ -291,7 +293,7 @@ def test_multi_device_station_state_is_independent() -> None:
 
     async def scenario() -> None:
         availability: list[tuple[str, bool]] = []
-        manager = websocket.WhiskerWebSocketManager(
+        manager = stream_manager.WhiskerWebSocketManager(
             object(),
             on_availability_update=lambda station, live: availability.append(
                 (station, live)
@@ -301,7 +303,7 @@ def test_multi_device_station_state_is_independent() -> None:
         for client in clients:
             client.connect = AsyncMock(return_value=True)
 
-        with patch.object(websocket, "WhiskerWebSocket", side_effect=clients):
+        with patch.object(stream_manager, "WhiskerWebSocket", side_effect=clients):
             assert await manager.connect_device("key", 42, "STATION-A")
             assert await manager.connect_device("key", 42, "STATION-B")
 
@@ -327,7 +329,7 @@ def test_duplicate_disconnect_schedules_one_reconnect_task() -> None:
     """Competing stale and receive-loop paths cannot create duplicate retries."""
 
     async def scenario() -> None:
-        manager = websocket.WhiskerWebSocketManager(object())
+        manager = stream_manager.WhiskerWebSocketManager(object())
         reconnect = AsyncMock()
         manager._reconnect_with_backoff = reconnect
 
@@ -462,12 +464,12 @@ def test_delayed_stream_retains_last_reading_and_availability() -> None:
     """Delayed data remains usable until the not-receiving threshold."""
     availability: list[bool] = []
     health: list[websocket.StreamHealth] = []
-    manager = websocket.WhiskerWebSocketManager(
+    manager = stream_manager.WhiskerWebSocketManager(
         object(),
         on_availability_update=lambda station, value: availability.append(value),
         on_health_update=lambda station, value: health.append(value),
     )
-    manager._station_states["ABC123"] = websocket.StationState(
+    manager._station_states["ABC123"] = stream_manager.StationState(
         connected=True,
         subscribed=True,
         live=True,

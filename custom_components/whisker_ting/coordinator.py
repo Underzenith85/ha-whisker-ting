@@ -20,7 +20,7 @@ from .api import (
     WhiskerAuthError,
 )
 from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
-from .websocket import (
+from .stream import (
     PowerQualityData,
     StreamHealth,
     VoltageData,

@@ -1,87 +1,35 @@
-"""WebSocket client for real-time Whisker Ting data."""
+"""One-station client for real-time Whisker Ting data."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import math
-import random
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import StrEnum
 from typing import Any
 
 import aiohttp
 
-from .const import SIGNALR_URL
+from ..const import SIGNALR_URL
+from .models import PowerQualityData, StreamHealth, VoltageData
+from .parser import (
+    SECONDARY_DATA_ELEMENTS,
+    decode_power_quality_data,
+    decode_voltage_data,
+    parse_timestamp,
+)
 from .signalr import (
     SignalRHandshakeError,
     SignalRProtocolError,
     decode_handshake_response,
     encode_invocation,
     encode_ping,
-    extract_categorical_payloads,
     extract_completions,
     extract_control_messages,
-    extract_invocation_payloads,
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-# SignalR MessagePack message types
-MSG_TYPE_INVOCATION = 1
-MSG_TYPE_STREAM_ITEM = 2
-MSG_TYPE_COMPLETION = 3
-MSG_TYPE_STREAM_INVOCATION = 4
-MSG_TYPE_CANCEL_INVOCATION = 5
-MSG_TYPE_PING = 6
-MSG_TYPE_CLOSE = 7
-
-
-@dataclass
-class VoltageData:
-    """Real-time voltage data from WebSocket."""
-
-    timestamp: datetime
-    voltage: float
-    voltage_hi: float
-    voltage_lo: float
-    average_peaks_max: float
-
-
-@dataclass(frozen=True)
-class PowerQualityData:
-    """One categorical power-quality reading from the Ting stream."""
-
-    timestamp: datetime
-    category: str
-    value: float
-
-
-class StreamHealth(StrEnum):
-    """Health of a station's real-time data stream."""
-
-    RECEIVING = "receiving"
-    DELAYED = "delayed"
-    NOT_RECEIVING = "not_receiving"
-    STOPPED = "stopped"
-
-
-@dataclass(frozen=True)
-class StationState:
-    """Connection, subscription, and stream liveness for one station."""
-
-    connected: bool = False
-    subscribed: bool = False
-    live: bool = False
-    health: StreamHealth = StreamHealth.STOPPED
-
-    @property
-    def available(self) -> bool:
-        """Return whether real-time readings for the station are current."""
-        return self.connected and self.subscribed and self.live
 
 
 class SignalRInvocationError(Exception):
@@ -96,7 +44,7 @@ class WhiskerWebSocket:
     HEALTH_CHECK_INTERVAL = 1.0
     INVOCATION_TIMEOUT = 10.0
     UNSUBSCRIBE_TIMEOUT = 5.0
-    SECONDARY_DATA_ELEMENTS = ("frequency", "thdMin", "thdAvg", "thdMax")
+    SECONDARY_DATA_ELEMENTS = SECONDARY_DATA_ELEMENTS
 
     def __init__(
         self,
@@ -295,84 +243,15 @@ class WhiskerWebSocket:
     @staticmethod
     def _parse_timestamp(value: Any) -> datetime:
         """Parse the timestamp representation used by the Ting stream."""
-        if isinstance(value, datetime):
-            return value
-        if isinstance(value, str):
-            try:
-                timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-                return timestamp.replace(tzinfo=timestamp.tzinfo or UTC)
-            except ValueError:
-                pass
-        return datetime.now(UTC)
+        return parse_timestamp(value)
 
     def _decode_voltage_data(self, data: bytes) -> list[VoltageData]:
         """Decode voltage readings from SignalR MessagePack messages."""
-        try:
-            payloads = extract_invocation_payloads(data, "updateComboBinaryData")
-        except SignalRProtocolError as err:
-            _LOGGER.debug("Error decoding SignalR voltage frame: %s", err)
-            return []
-
-        readings: list[VoltageData] = []
-        for payload in payloads:
-            try:
-                voltage = float(payload["Voltage"])
-                voltage_hi = float(payload["VoltageHi"])
-                voltage_lo = float(payload["VoltageLo"])
-                peaks = float(payload["AveragePeaksMax"])
-
-                if not all(
-                    math.isfinite(value)
-                    for value in (voltage, voltage_hi, voltage_lo, peaks)
-                ):
-                    raise ValueError("non-finite voltage value")
-
-                if abs(voltage) < 1 or abs(voltage) > 1000:
-                    _LOGGER.debug(
-                        "Discarding anomalous voltage reading: %.2fV", voltage
-                    )
-                    continue
-
-                readings.append(
-                    VoltageData(
-                        timestamp=self._parse_timestamp(payload.get("DataTimeUtc")),
-                        voltage=voltage,
-                        average_peaks_max=peaks,
-                        voltage_hi=voltage_hi,
-                        voltage_lo=voltage_lo,
-                    )
-                )
-            except (KeyError, TypeError, ValueError) as err:
-                _LOGGER.debug("Discarding invalid voltage payload: %s", err)
-
-        return readings
+        return decode_voltage_data(data)
 
     def _decode_power_quality_data(self, data: bytes) -> list[PowerQualityData]:
         """Decode the frequency and THD streams used by Ting 3.0.4."""
-        try:
-            payloads = extract_categorical_payloads(data)
-        except SignalRProtocolError as err:
-            _LOGGER.debug("Error decoding SignalR power-quality frame: %s", err)
-            return []
-        readings: list[PowerQualityData] = []
-        for payload in payloads:
-            try:
-                category = payload["Category"]
-                value = float(payload["Value"])
-                if category not in self.SECONDARY_DATA_ELEMENTS:
-                    continue
-                if not math.isfinite(value):
-                    raise ValueError("non-finite power-quality value")
-                readings.append(
-                    PowerQualityData(
-                        timestamp=self._parse_timestamp(payload.get("ObsTime")),
-                        category=category,
-                        value=value,
-                    )
-                )
-            except (KeyError, TypeError, ValueError):
-                continue
-        return readings
+        return decode_power_quality_data(data)
 
     async def connect(self) -> bool:
         """Connect to the SignalR hub."""
@@ -642,314 +521,3 @@ class WhiskerWebSocket:
                 _LOGGER.error("Error in ping loop: %s", err)
                 self._transition_disconnected("ping failure")
                 break
-
-
-class WhiskerWebSocketManager:
-    """Manages WebSocket connections for multiple devices."""
-
-    # Reconnect settings
-    RECONNECT_MIN_DELAY = 5
-    RECONNECT_MAX_DELAY = 300  # 5 minutes max
-    RECONNECT_BACKOFF_FACTOR = 2
-    RECONNECT_JITTER_FACTOR = 0.2
-
-    def __init__(
-        self,
-        session: aiohttp.ClientSession,
-        on_voltage_update: Callable[[str, VoltageData], None] | None = None,
-        on_power_quality_update: Callable[[str, PowerQualityData], None] | None = None,
-        on_availability_update: Callable[[str, bool], None] | None = None,
-        on_health_update: Callable[[str, StreamHealth], None] | None = None,
-    ) -> None:
-        """Initialize the manager."""
-        self._session = session
-        self._on_voltage_update = on_voltage_update
-        self._on_power_quality_update = on_power_quality_update
-        self._on_availability_update = on_availability_update
-        self._on_health_update = on_health_update
-        self._connections: dict[str, WhiskerWebSocket] = {}
-        self._voltage_data: dict[str, VoltageData] = {}
-        self._station_states: dict[str, StationState] = {}
-        self._credentials: dict[str, dict] = {}  # Store credentials for reconnect
-        self._reconnect_tasks: dict[str, asyncio.Task] = {}
-        self._reconnect_attempts: dict[str, int] = {}
-        self._shutting_down = False
-
-    def get_station_state(self, station_id: str) -> StationState:
-        """Return the independently tracked state for a station."""
-        return self._station_states.get(station_id, StationState())
-
-    def is_station_available(self, station_id: str) -> bool:
-        """Return whether a station has a subscribed, live stream."""
-        return self.get_station_state(station_id).available
-
-    def is_station_managed(self, station_id: str) -> bool:
-        """Return whether a station is connected or already reconnecting."""
-        reconnect = self._reconnect_tasks.get(station_id)
-        return station_id in self._connections or (
-            reconnect is not None and not reconnect.done()
-        )
-
-    def _set_station_state(self, station_id: str, state: StationState) -> None:
-        """Store station state and notify only when availability changes."""
-        previous = self.get_station_state(station_id)
-        self._station_states[station_id] = state
-        if (
-            previous.available != state.available
-            and self._on_availability_update is not None
-        ):
-            self._on_availability_update(station_id, state.available)
-        if previous.health != state.health and self._on_health_update is not None:
-            self._on_health_update(station_id, state.health)
-
-    def get_voltage_data(self, station_id: str) -> VoltageData | None:
-        """Get the latest voltage data for a station."""
-        return self._voltage_data.get(station_id)
-
-    def _handle_voltage_update(self, station_id: str, data: VoltageData) -> None:
-        """Handle voltage update from WebSocket."""
-        self._voltage_data[station_id] = data
-        # Reset reconnect attempts on successful data
-        self._reconnect_attempts[station_id] = 0
-        state = self.get_station_state(station_id)
-        self._set_station_state(
-            station_id,
-            StationState(
-                connected=state.connected,
-                subscribed=state.subscribed,
-                live=True,
-                health=StreamHealth.RECEIVING,
-            ),
-        )
-        _LOGGER.debug(
-            "Voltage update for %s: %.2fV (hi: %.2fV, lo: %.2fV)",
-            station_id,
-            data.voltage,
-            data.voltage_hi,
-            data.voltage_lo,
-        )
-        if self._on_voltage_update:
-            self._on_voltage_update(station_id, data)
-
-    def _handle_health_update(self, station_id: str, health: StreamHealth) -> None:
-        """Handle an independently calculated station health transition."""
-        state = self.get_station_state(station_id)
-        self._set_station_state(
-            station_id,
-            StationState(
-                connected=state.connected,
-                subscribed=state.subscribed,
-                live=health in (StreamHealth.RECEIVING, StreamHealth.DELAYED)
-                and state.live,
-                health=health,
-            ),
-        )
-
-    def _handle_disconnect(
-        self, station_id: str, reason: str, allow_reconnect: bool
-    ) -> None:
-        """Handle WebSocket disconnect - schedule reconnection."""
-        if self._shutting_down:
-            return
-
-        # Remove old connection
-        if station_id in self._connections:
-            del self._connections[station_id]
-        self._set_station_state(
-            station_id,
-            StationState(health=StreamHealth.NOT_RECEIVING),
-        )
-
-        if not allow_reconnect:
-            _LOGGER.warning(
-                "SignalR server disabled reconnect for station %s: %s",
-                station_id,
-                reason,
-            )
-            return
-
-        # Schedule reconnection
-        if (
-            station_id not in self._reconnect_tasks
-            or self._reconnect_tasks[station_id].done()
-        ):
-            self._reconnect_tasks[station_id] = asyncio.create_task(
-                self._reconnect_with_backoff(station_id)
-            )
-
-    async def _reconnect_with_backoff(self, station_id: str) -> None:
-        """Reconnect to a station with exponential backoff."""
-        try:
-            while not self._shutting_down:
-                creds = self._credentials.get(station_id)
-                if creds is None:
-                    _LOGGER.error(
-                        "No credentials stored for station %s, cannot reconnect",
-                        station_id,
-                    )
-                    return
-
-                attempts = self._reconnect_attempts.get(station_id, 0)
-                base_delay = min(
-                    self.RECONNECT_MIN_DELAY
-                    * (self.RECONNECT_BACKOFF_FACTOR**attempts),
-                    self.RECONNECT_MAX_DELAY,
-                )
-                jitter = random.uniform(
-                    0,
-                    min(
-                        base_delay * self.RECONNECT_JITTER_FACTOR,
-                        self.RECONNECT_MAX_DELAY - base_delay,
-                    ),
-                )
-                delay = base_delay + jitter
-
-                _LOGGER.info(
-                    "Reconnecting to station %s in %.1f seconds (attempt %d)",
-                    station_id,
-                    delay,
-                    attempts + 1,
-                )
-                await asyncio.sleep(delay)
-                if self._shutting_down:
-                    return
-
-                self._reconnect_attempts[station_id] = attempts + 1
-                ws = WhiskerWebSocket(
-                    session=self._session,
-                    api_key=creds["api_key"],
-                    user_id=creds["user_id"],
-                    station_id=station_id,
-                    on_voltage_update=self._handle_voltage_update,
-                    on_power_quality_update=self._on_power_quality_update,
-                    on_disconnect=self._handle_disconnect,
-                    on_health_update=self._handle_health_update,
-                )
-
-                if await ws.connect():
-                    self._connections[station_id] = ws
-                    state = self.get_station_state(station_id)
-                    self._set_station_state(
-                        station_id,
-                        StationState(
-                            connected=True,
-                            subscribed=True,
-                            live=state.live,
-                            health=state.health,
-                        ),
-                    )
-                    _LOGGER.info("Reconnected to station %s", station_id)
-                    return
-                _LOGGER.warning(
-                    "Reconnection failed for station %s, will retry", station_id
-                )
-        finally:
-            if self._reconnect_tasks.get(station_id) is asyncio.current_task():
-                self._reconnect_tasks.pop(station_id, None)
-
-    async def connect_device(
-        self,
-        api_key: str,
-        user_id: int,
-        station_id: str,
-    ) -> bool:
-        """Connect to a device's WebSocket stream."""
-        if station_id in self._connections:
-            connection = self._connections[station_id]
-            if connection.connected:
-                _LOGGER.debug("Already connected to station %s", station_id)
-                return True
-            self._connections.pop(station_id, None)
-
-        reconnect = self._reconnect_tasks.get(station_id)
-        if reconnect is not None and not reconnect.done():
-            _LOGGER.debug("Already reconnecting to station %s", station_id)
-            return False
-
-        # Store credentials for reconnection
-        self._credentials[station_id] = {
-            "api_key": api_key,
-            "user_id": user_id,
-        }
-        self._reconnect_attempts[station_id] = 0
-
-        ws = WhiskerWebSocket(
-            session=self._session,
-            api_key=api_key,
-            user_id=user_id,
-            station_id=station_id,
-            on_voltage_update=self._handle_voltage_update,
-            on_power_quality_update=self._on_power_quality_update,
-            on_disconnect=self._handle_disconnect,
-            on_health_update=self._handle_health_update,
-        )
-
-        if await ws.connect():
-            self._connections[station_id] = ws
-            state = self.get_station_state(station_id)
-            self._set_station_state(
-                station_id,
-                StationState(
-                    connected=True,
-                    subscribed=True,
-                    live=state.live,
-                    health=StreamHealth.DELAYED,
-                ),
-            )
-            return True
-        self._set_station_state(station_id, StationState())
-        return False
-
-    async def disconnect_all(self) -> None:
-        """Disconnect all WebSocket connections."""
-        self._shutting_down = True
-
-        # Cancel any pending reconnect tasks
-        for task in self._reconnect_tasks.values():
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-        self._reconnect_tasks.clear()
-
-        # Disconnect all connections
-        for station_id, ws in list(self._connections.items()):
-            await ws.disconnect()
-            del self._connections[station_id]
-        self._station_states.clear()
-        self._voltage_data.clear()
-        self._credentials.clear()
-        self._reconnect_attempts.clear()
-
-    async def disconnect_device(self, station_id: str) -> None:
-        """Disconnect a specific device."""
-        # Cancel any pending reconnect
-        if station_id in self._reconnect_tasks:
-            task = self._reconnect_tasks[station_id]
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-            del self._reconnect_tasks[station_id]
-
-        if station_id in self._connections:
-            await self._connections[station_id].disconnect()
-            del self._connections[station_id]
-        self._station_states.pop(station_id, None)
-        self._voltage_data.pop(station_id, None)
-        self._credentials.pop(station_id, None)
-        self._reconnect_attempts.pop(station_id, None)
-
-    async def wait_for_data(self, station_id: str, timeout: float = 5.0) -> bool:
-        """Wait for first voltage data from a specific station.
-
-        Returns True if data was received, False if timeout or not connected.
-        """
-        ws = self._connections.get(station_id)
-        if ws:
-            return await ws.wait_for_data(timeout=timeout)
-        return False

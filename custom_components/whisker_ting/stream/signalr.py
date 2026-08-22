@@ -1,4 +1,4 @@
-"""Minimal ASP.NET Core SignalR MessagePack encoding helpers."""
+"""Generic ASP.NET Core SignalR MessagePack framing and decoding."""
 
 from __future__ import annotations
 

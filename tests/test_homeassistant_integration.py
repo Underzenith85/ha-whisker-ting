@@ -37,7 +37,7 @@ from custom_components.whisker_ting.coordinator import (
     WhiskerDataUpdateCoordinator,
 )
 from custom_components.whisker_ting.sensor import SENSOR_DESCRIPTIONS, WhiskerSensor
-from custom_components.whisker_ting.websocket import VoltageData
+from custom_components.whisker_ting.stream import VoltageData
 
 
 @pytest.mark.asyncio
