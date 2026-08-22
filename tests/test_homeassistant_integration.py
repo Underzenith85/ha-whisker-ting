@@ -135,6 +135,27 @@ def test_entity_availability_tracks_coordinator_device_membership(
     assert not entity.available
 
 
+def test_shared_entity_device_info_handles_present_and_missing_state() -> None:
+    """All platforms retain stable registry identity when REST state disappears."""
+    device = DeviceState(
+        "SERIAL-001", "Fixture device", "FireSensor", 1, version="3.0.4"
+    )
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.data = {device.serial_number: device}
+    entity = WhiskerBinarySensor(
+        coordinator, device.serial_number, BINARY_SENSOR_DESCRIPTIONS[0]
+    )
+
+    assert entity.unique_id == "SERIAL-001_fire_hazard"
+    assert entity.device_info["name"] == "Fixture device"
+    assert entity.device_info["sw_version"] == "3.0.4"
+
+    coordinator.data = {}
+    assert entity.device_info["identifiers"] == {("whisker_ting", "SERIAL-001")}
+    assert entity.device_info["name"] == "SERIAL-001"
+
+
 def test_only_realtime_entities_become_unavailable_on_stream_loss() -> None:
     """A frozen voltage is hidden while REST-backed device state stays available."""
     device = DeviceState("SERIAL-001", "Fixture device", "FireSensor", 1)

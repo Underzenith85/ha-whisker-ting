@@ -13,13 +13,11 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api import DeviceState
-from .const import DOMAIN
 from .coordinator import WhiskerDataUpdateCoordinator
+from .entity import WhiskerEntity
 
 PARALLEL_UPDATES = 0  # Coordinator handles all updates
 
@@ -43,8 +41,10 @@ BINARY_SENSOR_DESCRIPTIONS: tuple[WhiskerBinarySensorEntityDescription, ...] = (
         key="electrical_fire_hazard",
         translation_key="electrical_fire_hazard",
         device_class=BinarySensorDeviceClass.SAFETY,
-        value_fn=lambda state: state.fire_hazard_status.efh_status.status
-        in {"ElevatedSuspicious", "PossibleFire", "HazardFound"},
+        value_fn=lambda state: (
+            state.fire_hazard_status.efh_status.status
+            in {"ElevatedSuspicious", "PossibleFire", "HazardFound"}
+        ),
     ),
     WhiskerBinarySensorEntityDescription(
         key="unverified_fire_hazard",
@@ -110,9 +110,7 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class WhiskerBinarySensor(
-    CoordinatorEntity[WhiskerDataUpdateCoordinator], BinarySensorEntity
-):
+class WhiskerBinarySensor(WhiskerEntity, BinarySensorEntity):
     """Representation of a Whisker Ting binary sensor."""
 
     entity_description: WhiskerBinarySensorEntityDescription
@@ -125,38 +123,12 @@ class WhiskerBinarySensor(
         description: WhiskerBinarySensorEntityDescription,
     ) -> None:
         """Initialize the binary sensor."""
-        super().__init__(coordinator)
-        self.entity_description = description
-        self._device_id = device_id
-        self._attr_unique_id = f"{device_id}_{description.key}"
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return device information."""
-        device_state = self.coordinator.data.get(self._device_id)
-        if device_state:
-            return DeviceInfo(
-                identifiers={(DOMAIN, self._device_id)},
-                name=device_state.name,
-                manufacturer="Whisker Labs",
-                model="Ting Fire Sensor",
-                sw_version=device_state.version,
-            )
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._device_id)},
-            name=self._device_id,
-            manufacturer="Whisker Labs",
-        )
-
-    @property
-    def available(self) -> bool:
-        """Return if entity is available."""
-        return super().available and self._device_id in self.coordinator.data
+        super().__init__(coordinator, device_id, description)
 
     @property
     def is_on(self) -> bool | None:
         """Return true if the binary sensor is on."""
-        device_state = self.coordinator.data.get(self._device_id)
+        device_state = self.device_state
         if device_state is None:
             return None
         return self.entity_description.value_fn(device_state)
