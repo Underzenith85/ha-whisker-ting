@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import random
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -47,6 +48,20 @@ class VoltageData:
     average_peaks_max: float
 
 
+@dataclass(frozen=True)
+class StationState:
+    """Connection, subscription, and stream liveness for one station."""
+
+    connected: bool = False
+    subscribed: bool = False
+    live: bool = False
+
+    @property
+    def available(self) -> bool:
+        """Return whether real-time readings for the station are current."""
+        return self.connected and self.subscribed and self.live
+
+
 class SignalRInvocationError(Exception):
     """Raised when a SignalR hub invocation fails."""
 
@@ -76,7 +91,6 @@ class WhiskerWebSocket:
         self._on_disconnect = on_disconnect
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._connected = False
-        self._reconnect_task: asyncio.Task | None = None
         self._ping_task: asyncio.Task | None = None
         self._receive_task: asyncio.Task | None = None
         self._stale_check_task: asyncio.Task | None = None
@@ -166,6 +180,10 @@ class WhiskerWebSocket:
         self._fail_pending_invocations(
             SignalRInvocationError("WebSocket disconnected")
         )
+        current_task = asyncio.current_task()
+        for task in (self._ping_task, self._receive_task, self._stale_check_task):
+            if task is not None and task is not current_task and not task.done():
+                task.cancel()
         if self._shutting_down or self._disconnect_notified:
             return
         self._disconnect_notified = True
@@ -329,7 +347,7 @@ class WhiskerWebSocket:
 
         if self._ws and not self._ws.closed:
             await self._ws.close()
-            self._ws = None
+        self._ws = None
 
         _LOGGER.debug("Disconnected from SignalR hub")
 
@@ -347,57 +365,69 @@ class WhiskerWebSocket:
 
     async def _receive_loop(self) -> None:
         """Receive messages from the WebSocket."""
-        while self._connected and self._ws and not self._ws.closed:
-            try:
-                msg = await asyncio.wait_for(
-                    self._ws.receive(),
-                    timeout=30,
-                )
+        try:
+            while self._connected and self._ws and not self._ws.closed:
+                try:
+                    msg = await asyncio.wait_for(
+                        self._ws.receive(),
+                        timeout=30,
+                    )
 
-                if msg.type == aiohttp.WSMsgType.BINARY:
-                    try:
-                        self._handle_completions(msg.data)
-                        ping_count, close_messages = extract_control_messages(msg.data)
-                    except SignalRProtocolError as err:
-                        _LOGGER.error("SignalR protocol failure: %s", err)
-                        self._transition_disconnected("protocol failure")
-                        break
-                    if ping_count:
-                        _LOGGER.debug("Received %d SignalR Ping message(s)", ping_count)
-                    if close_messages:
-                        close = close_messages[-1]
+                    if msg.type == aiohttp.WSMsgType.BINARY:
+                        try:
+                            self._handle_completions(msg.data)
+                            ping_count, close_messages = extract_control_messages(
+                                msg.data
+                            )
+                        except SignalRProtocolError as err:
+                            _LOGGER.error("SignalR protocol failure: %s", err)
+                            self._transition_disconnected("protocol failure")
+                            break
+                        if ping_count:
+                            _LOGGER.debug(
+                                "Received %d SignalR Ping message(s)", ping_count
+                            )
+                        if close_messages:
+                            close = close_messages[-1]
+                            self._transition_disconnected(
+                                close.reason,
+                                allow_reconnect=close.allow_reconnect,
+                            )
+                            break
+                        for voltage_data in self._decode_voltage_data(msg.data):
+                            if self._on_voltage_update:
+                                self._last_data_time = datetime.now(UTC)
+                                self._on_voltage_update(
+                                    self._station_id, voltage_data
+                                )
+                                if not self._first_data_received.is_set():
+                                    self._first_data_received.set()
+
+                    elif msg.type == aiohttp.WSMsgType.TEXT:
+                        _LOGGER.warning(
+                            "Unexpected text message after SignalR handshake"
+                        )
+
+                    elif msg.type in (
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.ERROR,
+                    ):
                         self._transition_disconnected(
-                            close.reason, allow_reconnect=close.allow_reconnect
+                            f"transport closed ({msg.type})"
                         )
                         break
-                    for voltage_data in self._decode_voltage_data(msg.data):
-                        if self._on_voltage_update:
-                            self._last_data_time = datetime.now(UTC)
-                            self._on_voltage_update(self._station_id, voltage_data)
-                            # Signal that we've received data
-                            if not self._first_data_received.is_set():
-                                self._first_data_received.set()
 
-                elif msg.type == aiohttp.WSMsgType.TEXT:
-                    _LOGGER.warning("Unexpected text message after SignalR handshake")
-
-                elif msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.ERROR,
-                ):
-                    self._transition_disconnected(
-                        f"transport closed ({msg.type})"
-                    )
+                except asyncio.TimeoutError:
+                    _LOGGER.debug("WebSocket receive timeout, continuing...")
+                except asyncio.CancelledError:
                     break
-
-            except asyncio.TimeoutError:
-                _LOGGER.debug("WebSocket receive timeout, continuing...")
-            except asyncio.CancelledError:
-                break
-            except Exception as err:
-                _LOGGER.error("Error in receive loop: %s", err)
-                self._transition_disconnected("receive failure")
-                break
+                except Exception as err:
+                    _LOGGER.error("Error in receive loop: %s", err)
+                    self._transition_disconnected("receive failure")
+                    break
+        finally:
+            if self._ws is not None and not self._ws.closed:
+                await self._ws.close()
 
     async def _stale_data_check_loop(self) -> None:
         """Check for stale data and trigger reconnect if needed."""
@@ -425,6 +455,7 @@ class WhiskerWebSocket:
                 break
             except Exception as err:
                 _LOGGER.error("Error in stale data check: %s", err)
+                self._transition_disconnected("stale-data check failure")
                 break
 
     async def _ping_loop(self) -> None:
@@ -440,6 +471,7 @@ class WhiskerWebSocket:
                 break
             except Exception as err:
                 _LOGGER.error("Error in ping loop: %s", err)
+                self._transition_disconnected("ping failure")
                 break
 
 
@@ -450,21 +482,50 @@ class WhiskerWebSocketManager:
     RECONNECT_MIN_DELAY = 5
     RECONNECT_MAX_DELAY = 300  # 5 minutes max
     RECONNECT_BACKOFF_FACTOR = 2
+    RECONNECT_JITTER_FACTOR = 0.2
 
     def __init__(
         self,
         session: aiohttp.ClientSession,
         on_voltage_update: Callable[[str, VoltageData], None] | None = None,
+        on_availability_update: Callable[[str, bool], None] | None = None,
     ) -> None:
         """Initialize the manager."""
         self._session = session
         self._on_voltage_update = on_voltage_update
+        self._on_availability_update = on_availability_update
         self._connections: dict[str, WhiskerWebSocket] = {}
         self._voltage_data: dict[str, VoltageData] = {}
+        self._station_states: dict[str, StationState] = {}
         self._credentials: dict[str, dict] = {}  # Store credentials for reconnect
         self._reconnect_tasks: dict[str, asyncio.Task] = {}
         self._reconnect_attempts: dict[str, int] = {}
         self._shutting_down = False
+
+    def get_station_state(self, station_id: str) -> StationState:
+        """Return the independently tracked state for a station."""
+        return self._station_states.get(station_id, StationState())
+
+    def is_station_available(self, station_id: str) -> bool:
+        """Return whether a station has a subscribed, live stream."""
+        return self.get_station_state(station_id).available
+
+    def is_station_managed(self, station_id: str) -> bool:
+        """Return whether a station is connected or already reconnecting."""
+        reconnect = self._reconnect_tasks.get(station_id)
+        return station_id in self._connections or (
+            reconnect is not None and not reconnect.done()
+        )
+
+    def _set_station_state(self, station_id: str, state: StationState) -> None:
+        """Store station state and notify only when availability changes."""
+        previous = self.get_station_state(station_id)
+        self._station_states[station_id] = state
+        if (
+            previous.available != state.available
+            and self._on_availability_update is not None
+        ):
+            self._on_availability_update(station_id, state.available)
 
     def get_voltage_data(self, station_id: str) -> VoltageData | None:
         """Get the latest voltage data for a station."""
@@ -475,6 +536,15 @@ class WhiskerWebSocketManager:
         self._voltage_data[station_id] = data
         # Reset reconnect attempts on successful data
         self._reconnect_attempts[station_id] = 0
+        state = self.get_station_state(station_id)
+        self._set_station_state(
+            station_id,
+            StationState(
+                connected=state.connected,
+                subscribed=state.subscribed,
+                live=True,
+            ),
+        )
         _LOGGER.debug(
             "Voltage update for %s: %.2fV (hi: %.2fV, lo: %.2fV)",
             station_id,
@@ -495,6 +565,7 @@ class WhiskerWebSocketManager:
         # Remove old connection
         if station_id in self._connections:
             del self._connections[station_id]
+        self._set_station_state(station_id, StationState())
 
         if not allow_reconnect:
             _LOGGER.warning(
@@ -505,60 +576,80 @@ class WhiskerWebSocketManager:
             return
 
         # Schedule reconnection
-        if station_id not in self._reconnect_tasks or self._reconnect_tasks[station_id].done():
+        if (
+            station_id not in self._reconnect_tasks
+            or self._reconnect_tasks[station_id].done()
+        ):
             self._reconnect_tasks[station_id] = asyncio.create_task(
                 self._reconnect_with_backoff(station_id)
             )
 
     async def _reconnect_with_backoff(self, station_id: str) -> None:
         """Reconnect to a station with exponential backoff."""
-        if station_id not in self._credentials:
-            _LOGGER.error("No credentials stored for station %s, cannot reconnect", station_id)
-            return
+        try:
+            while not self._shutting_down:
+                creds = self._credentials.get(station_id)
+                if creds is None:
+                    _LOGGER.error(
+                        "No credentials stored for station %s, cannot reconnect",
+                        station_id,
+                    )
+                    return
 
-        creds = self._credentials[station_id]
-        attempts = self._reconnect_attempts.get(station_id, 0)
-
-        # Calculate delay with exponential backoff
-        delay = min(
-            self.RECONNECT_MIN_DELAY * (self.RECONNECT_BACKOFF_FACTOR ** attempts),
-            self.RECONNECT_MAX_DELAY,
-        )
-
-        _LOGGER.info(
-            "Reconnecting to station %s in %.0f seconds (attempt %d)",
-            station_id,
-            delay,
-            attempts + 1,
-        )
-
-        await asyncio.sleep(delay)
-
-        if self._shutting_down:
-            return
-
-        self._reconnect_attempts[station_id] = attempts + 1
-
-        # Create new connection
-        ws = WhiskerWebSocket(
-            session=self._session,
-            api_key=creds["api_key"],
-            user_id=creds["user_id"],
-            station_id=station_id,
-            on_voltage_update=self._handle_voltage_update,
-            on_disconnect=self._handle_disconnect,
-        )
-
-        if await ws.connect():
-            self._connections[station_id] = ws
-            _LOGGER.info("Reconnected to station %s", station_id)
-        else:
-            _LOGGER.warning("Reconnection failed for station %s, will retry", station_id)
-            # Schedule another reconnect attempt
-            if not self._shutting_down:
-                self._reconnect_tasks[station_id] = asyncio.create_task(
-                    self._reconnect_with_backoff(station_id)
+                attempts = self._reconnect_attempts.get(station_id, 0)
+                base_delay = min(
+                    self.RECONNECT_MIN_DELAY
+                    * (self.RECONNECT_BACKOFF_FACTOR**attempts),
+                    self.RECONNECT_MAX_DELAY,
                 )
+                jitter = random.uniform(
+                    0,
+                    min(
+                        base_delay * self.RECONNECT_JITTER_FACTOR,
+                        self.RECONNECT_MAX_DELAY - base_delay,
+                    ),
+                )
+                delay = base_delay + jitter
+
+                _LOGGER.info(
+                    "Reconnecting to station %s in %.1f seconds (attempt %d)",
+                    station_id,
+                    delay,
+                    attempts + 1,
+                )
+                await asyncio.sleep(delay)
+                if self._shutting_down:
+                    return
+
+                self._reconnect_attempts[station_id] = attempts + 1
+                ws = WhiskerWebSocket(
+                    session=self._session,
+                    api_key=creds["api_key"],
+                    user_id=creds["user_id"],
+                    station_id=station_id,
+                    on_voltage_update=self._handle_voltage_update,
+                    on_disconnect=self._handle_disconnect,
+                )
+
+                if await ws.connect():
+                    self._connections[station_id] = ws
+                    state = self.get_station_state(station_id)
+                    self._set_station_state(
+                        station_id,
+                        StationState(
+                            connected=True,
+                            subscribed=True,
+                            live=state.live,
+                        ),
+                    )
+                    _LOGGER.info("Reconnected to station %s", station_id)
+                    return
+                _LOGGER.warning(
+                    "Reconnection failed for station %s, will retry", station_id
+                )
+        finally:
+            if self._reconnect_tasks.get(station_id) is asyncio.current_task():
+                self._reconnect_tasks.pop(station_id, None)
 
     async def connect_device(
         self,
@@ -568,8 +659,16 @@ class WhiskerWebSocketManager:
     ) -> bool:
         """Connect to a device's WebSocket stream."""
         if station_id in self._connections:
-            _LOGGER.debug("Already connected to station %s", station_id)
-            return True
+            connection = self._connections[station_id]
+            if connection.connected:
+                _LOGGER.debug("Already connected to station %s", station_id)
+                return True
+            self._connections.pop(station_id, None)
+
+        reconnect = self._reconnect_tasks.get(station_id)
+        if reconnect is not None and not reconnect.done():
+            _LOGGER.debug("Already reconnecting to station %s", station_id)
+            return False
 
         # Store credentials for reconnection
         self._credentials[station_id] = {
@@ -589,7 +688,17 @@ class WhiskerWebSocketManager:
 
         if await ws.connect():
             self._connections[station_id] = ws
+            state = self.get_station_state(station_id)
+            self._set_station_state(
+                station_id,
+                StationState(
+                    connected=True,
+                    subscribed=True,
+                    live=state.live,
+                ),
+            )
             return True
+        self._set_station_state(station_id, StationState())
         return False
 
     async def disconnect_all(self) -> None:
@@ -610,6 +719,10 @@ class WhiskerWebSocketManager:
         for station_id, ws in list(self._connections.items()):
             await ws.disconnect()
             del self._connections[station_id]
+        self._station_states.clear()
+        self._voltage_data.clear()
+        self._credentials.clear()
+        self._reconnect_attempts.clear()
 
     async def disconnect_device(self, station_id: str) -> None:
         """Disconnect a specific device."""
@@ -627,6 +740,10 @@ class WhiskerWebSocketManager:
         if station_id in self._connections:
             await self._connections[station_id].disconnect()
             del self._connections[station_id]
+        self._station_states.pop(station_id, None)
+        self._voltage_data.pop(station_id, None)
+        self._credentials.pop(station_id, None)
+        self._reconnect_attempts.pop(station_id, None)
 
     async def wait_for_data(self, station_id: str, timeout: float = 5.0) -> bool:
         """Wait for first voltage data from a specific station.

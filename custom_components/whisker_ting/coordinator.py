@@ -22,6 +22,8 @@ _LOGGER = logging.getLogger(__name__)
 class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
     """Class to manage fetching Whisker Ting data."""
 
+    STREAM_UPDATE_INTERVAL = 1.0
+
     def __init__(
         self,
         hass: HomeAssistant,
@@ -40,7 +42,55 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
         self._session = session
         self._last_update_success: bool | None = None
         self._ws_manager: WhiskerWebSocketManager | None = None
-        self._ws_connected = False
+        self._last_stream_listener_update = 0.0
+        self._stream_update_handle: asyncio.TimerHandle | None = None
+
+    @callback
+    def _schedule_stream_listener_update(self) -> None:
+        """Notify listeners at most once per configured stream interval."""
+        if self.data is None:
+            return
+        loop = asyncio.get_running_loop()
+        elapsed = loop.time() - self._last_stream_listener_update
+        if elapsed >= self.STREAM_UPDATE_INTERVAL:
+            self._flush_stream_listener_update()
+        elif self._stream_update_handle is None:
+            self._stream_update_handle = loop.call_later(
+                self.STREAM_UPDATE_INTERVAL - elapsed,
+                self._flush_stream_listener_update,
+            )
+
+    @callback
+    def _flush_stream_listener_update(self) -> None:
+        """Publish the newest in-memory stream state to listeners."""
+        self._stream_update_handle = None
+        if self.data is None:
+            return
+        self._last_stream_listener_update = asyncio.get_running_loop().time()
+        self.async_set_updated_data(self.data)
+
+    @callback
+    def _handle_availability_update(
+        self, station_id: str, available: bool
+    ) -> None:
+        """Publish a station availability transition through the throttle."""
+        _LOGGER.debug(
+            "Station %s real-time availability changed to %s",
+            station_id,
+            available,
+        )
+        self._schedule_stream_listener_update()
+
+    def is_realtime_available(self, device_id: str) -> bool:
+        """Return whether a device's real-time stream is subscribed and live."""
+        if self.data is None or self._ws_manager is None:
+            return False
+        device = self.data.get(device_id)
+        return bool(
+            device
+            and device.station_id
+            and self._ws_manager.is_station_available(device.station_id)
+        )
 
     @callback
     def _handle_voltage_update(self, station_id: str, voltage_data: VoltageData) -> None:
@@ -58,8 +108,7 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
                     voltage_lo=voltage_data.voltage_lo,
                     average_peaks_max=voltage_data.average_peaks_max,
                 )
-                # Trigger an update for listeners
-                self.async_set_updated_data(self.data)
+                self._schedule_stream_listener_update()
                 break
 
     async def _connect_websocket(self, data: dict[str, DeviceState]) -> None:
@@ -68,9 +117,10 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
             self._ws_manager = WhiskerWebSocketManager(
                 session=self._session,
                 on_voltage_update=self._handle_voltage_update,
+                on_availability_update=self._handle_availability_update,
             )
 
-        if not data or self._ws_connected:
+        if not data:
             return
 
         # Get api_key and user_id from the client
@@ -83,7 +133,10 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
 
         # Connect to each device's WebSocket stream
         for device_id, device_state in data.items():
-            if device_state.station_id:
+            if (
+                device_state.station_id
+                and not self._ws_manager.is_station_managed(device_state.station_id)
+            ):
                 try:
                     connected = await self._ws_manager.connect_device(
                         api_key=api_key,
@@ -96,7 +149,6 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
                             device_id,
                             device_state.station_id,
                         )
-                        self._ws_connected = True
                 except Exception as err:
                     _LOGGER.warning(
                         "Failed to connect WebSocket for device %s: %s",
@@ -106,9 +158,11 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
 
     async def async_shutdown(self) -> None:
         """Shutdown the coordinator."""
+        if self._stream_update_handle is not None:
+            self._stream_update_handle.cancel()
+            self._stream_update_handle = None
         if self._ws_manager:
             await self._ws_manager.disconnect_all()
-            self._ws_connected = False
         await super().async_shutdown()
 
     async def _async_update_data(self) -> dict[str, DeviceState]:
@@ -127,30 +181,30 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
                 _LOGGER.info("Connection to Whisker Ting API restored")
             self._last_update_success = True
 
-            # Connect WebSocket on first fetch and wait for data
-            if not self._ws_connected:
-                await self._connect_websocket(data)
-                # Wait for actual voltage data to arrive (not arbitrary sleep)
-                if self._ws_connected and self._ws_manager:
-                    # Wait for data from all devices in parallel
-                    wait_tasks = [
-                        self._ws_manager.wait_for_data(device_state.station_id, timeout=5.0)
-                        for device_state in data.values()
-                        if device_state.station_id
-                    ]
-                    if wait_tasks:
-                        await asyncio.gather(*wait_tasks)
-                    # Update data with voltage readings received
-                    for device_id, device_state in data.items():
-                        if device_state.station_id:
-                            voltage_data = self._ws_manager.get_voltage_data(device_state.station_id)
-                            if voltage_data:
-                                device_state.voltage = VoltageReading(
-                                    voltage=voltage_data.voltage,
-                                    voltage_hi=voltage_data.voltage_hi,
-                                    voltage_lo=voltage_data.voltage_lo,
-                                    average_peaks_max=voltage_data.average_peaks_max,
-                                )
+            await self._connect_websocket(data)
+            if self._ws_manager:
+                wait_tasks = [
+                    self._ws_manager.wait_for_data(
+                        device_state.station_id, timeout=5.0
+                    )
+                    for device_state in data.values()
+                    if device_state.station_id
+                    and self._ws_manager.is_station_managed(device_state.station_id)
+                ]
+                if wait_tasks:
+                    await asyncio.gather(*wait_tasks)
+                for device_state in data.values():
+                    if device_state.station_id:
+                        voltage_data = self._ws_manager.get_voltage_data(
+                            device_state.station_id
+                        )
+                        if voltage_data:
+                            device_state.voltage = VoltageReading(
+                                voltage=voltage_data.voltage,
+                                voltage_hi=voltage_data.voltage_hi,
+                                voltage_lo=voltage_data.voltage_lo,
+                                average_peaks_max=voltage_data.average_peaks_max,
+                            )
 
             return data
         except WhiskerAuthError as err:
