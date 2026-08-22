@@ -51,7 +51,17 @@ def test_uv_project_matches_integration_release() -> None:
     assert pyproject["project"]["version"] == manifest["version"]
     assert pyproject["project"]["requires-python"] == ">=3.12,<3.13"
     assert pyproject["tool"]["uv"]["package"] is False
-    assert (ROOT / "uv.lock").is_file()
+    with (ROOT / "uv.lock").open("rb") as file:
+        lockfile = tomllib.load(file)
+    project = next(
+        package
+        for package in lockfile["package"]
+        if package["name"] == pyproject["project"]["name"]
+    )
+    assert project["version"] == manifest["version"]
+    assert f"Integration version {manifest['version']} " in (
+        ROOT / "README.md"
+    ).read_text(encoding="utf-8")
     assert not (ROOT / "requirements_test.txt").exists()
 
 
