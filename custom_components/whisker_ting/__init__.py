@@ -18,7 +18,6 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONF_USERNAME,
     DEFAULT_SCAN_INTERVAL,
-    DOMAIN,
 )
 from .coordinator import WhiskerDataUpdateCoordinator
 

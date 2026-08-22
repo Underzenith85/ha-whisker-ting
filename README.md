@@ -82,6 +82,21 @@ Ensure you're using the same email and password you use in the Whisker Labs mobi
 
 This integration is not affiliated with or endorsed by Whisker Labs, Inc.
 
+## Development
+
+Create a virtual environment, install the pinned test dependencies, and run the
+same checks used by CI:
+
+```bash
+python -m pip install -r requirements_test.txt
+python -m pytest
+python -m ruff check custom_components tests
+python -m compileall -q custom_components tests
+```
+
+Tests must mock Ting and Cognito traffic. Never commit account credentials,
+tokens, device identifiers, or unsanitized API responses.
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.

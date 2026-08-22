@@ -7,7 +7,7 @@ import logging
 import struct
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable
+from typing import Callable
 
 import aiohttp
 import msgpack
