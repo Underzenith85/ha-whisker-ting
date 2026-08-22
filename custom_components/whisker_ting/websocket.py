@@ -13,6 +13,7 @@ import aiohttp
 import msgpack
 
 from .const import SIGNALR_URL
+from .signalr import encode_invocation, encode_ping
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -78,24 +79,11 @@ class WhiskerWebSocket:
     def _encode_invocation(self, method: str, args: list) -> bytes:
         """Encode a SignalR invocation message."""
         self._message_id += 1
-        # SignalR MessagePack invocation format:
-        # {1: [type, headers, invocationId, target, arguments]}
-        # Type 1 = INVOCATION (not streaming)
-        message = {
-            1: [
-                MSG_TYPE_INVOCATION,
-                {},  # headers
-                str(self._message_id),  # invocationId
-                method,
-                args,
-            ]
-        }
-        return msgpack.packb(message, use_bin_type=True)
+        return encode_invocation(str(self._message_id), method, args)
 
     def _encode_ping(self) -> bytes:
         """Encode a SignalR ping message."""
-        # Ping is just {1: [6]}
-        return msgpack.packb({1: [MSG_TYPE_PING]}, use_bin_type=True)
+        return encode_ping()
 
     def _decode_voltage_data(self, data: bytes) -> VoltageData | None:
         """Decode voltage data from MessagePack message."""
