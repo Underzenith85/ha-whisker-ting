@@ -29,7 +29,14 @@ from .errors import (
     WhiskerRateLimitError,
     WhiskerServiceError,
 )
-from .models import ConditionsSnapshot, DeviceState, FrozenPipeData, TingEvent, UserData
+from .models import (
+    ConditionsSnapshot,
+    DeviceState,
+    FrozenPipeData,
+    Site,
+    TingEvent,
+    UserData,
+)
 from .parsers import (
     parse_conditions,
     parse_event_history,
@@ -68,6 +75,7 @@ class WhiskerApiClient:
         self._user_id = user_id
         self._token_expiry: datetime | None = None
         self._lock = asyncio.Lock()
+        self._sites: dict[int, Site] = {}
 
     @property
     def user_id(self) -> int | None:
@@ -83,6 +91,11 @@ class WhiskerApiClient:
     def refresh_token(self) -> str | None:
         """Return the refresh token for config-entry persistence."""
         return self._refresh_token
+
+    @property
+    def sites(self) -> dict[int, Site]:
+        """Return the most recently validated sites by stable site ID."""
+        return self._sites
 
     async def _ensure_token(self) -> str:
         """Ensure we have a valid access token."""
@@ -290,14 +303,15 @@ class WhiskerApiClient:
     async def get_all_device_states(self) -> dict[str, DeviceState]:
         """Get the state of all devices."""
         user_data = await self.get_user_data()
+        self._sites = {site.id: site for site in user_data.sites}
         devices = {device.serial_number: device for device in user_data.devices}
         conditions = await self.get_user_conditions()
         if conditions is None:
             return devices
 
-        for device in devices.values():
-            device.current_temperature_c = conditions.temperatures.get(device.site_id)
-            device.current_outage_risk = conditions.outage_risks.get(device.site_id)
+        for site in self._sites.values():
+            site.current_temperature_c = conditions.temperatures.get(site.id)
+            site.current_outage_risk = conditions.outage_risks.get(site.id)
 
         # The conditions response also carries fresher copies of device status.
         for value in conditions.devices:

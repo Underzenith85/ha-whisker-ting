@@ -11,12 +11,14 @@ import pytest
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from custom_components.whisker_ting import async_unload_entry
 from custom_components.whisker_ting.api import (
     DeviceState,
     FrozenPipeData,
+    Site,
     UserData,
     WhiskerApiError,
 )
@@ -38,8 +40,13 @@ from custom_components.whisker_ting.coordinator import (
 )
 from custom_components.whisker_ting.sensor import (
     SENSOR_DESCRIPTIONS,
+    SITE_SENSOR_DESCRIPTIONS,
     WhiskerSensor,
     WhiskerSensorEntityDescription,
+    WhiskerSiteSensor,
+)
+from custom_components.whisker_ting.sensor import (
+    async_setup_entry as async_setup_sensor_entry,
 )
 from custom_components.whisker_ting.stream import (
     PowerQualityCategory,
@@ -173,6 +180,87 @@ def test_shared_entity_device_info_handles_present_and_missing_state() -> None:
     coordinator.data = {}
     assert entity.device_info["identifiers"] == {("whisker_ting", "SERIAL-001")}
     assert entity.device_info["name"] == "SERIAL-001"
+
+
+@pytest.mark.asyncio
+async def test_site_entities_are_unique_per_site_and_migrate_legacy_duplicates(
+    hass: HomeAssistant,
+) -> None:
+    """Shared site conditions produce one entity while retaining one entity ID."""
+    first = DeviceState("SERIAL-001", "First device", "FireSensor", 100)
+    second = DeviceState("SERIAL-002", "Second device", "FireSensor", 100)
+    site = Site(
+        100,
+        42,
+        "Home",
+        address_line1="123 Private Street",
+        latitude=40.1,
+        longitude=-74.2,
+        current_temperature_c=20.5,
+    )
+    coordinator = MagicMock()
+    coordinator.data = {first.serial_number: first, second.serial_number: second}
+    coordinator.sites = {site.id: site}
+    registry = er.async_get(hass)
+    retained = registry.async_get_or_create(
+        "sensor",
+        DOMAIN,
+        "SERIAL-001_current_outdoor_temperature",
+        suggested_object_id="legacy_site_temperature",
+    )
+    duplicate = registry.async_get_or_create(
+        "sensor",
+        DOMAIN,
+        "SERIAL-002_current_outdoor_temperature",
+        suggested_object_id="duplicate_site_temperature",
+    )
+    entry = MagicMock(runtime_data=coordinator)
+    add_entities = MagicMock()
+
+    await async_setup_sensor_entry(hass, entry, add_entities)
+
+    entities = add_entities.call_args.args[0]
+    site_entities = [
+        entity for entity in entities if isinstance(entity, WhiskerSiteSensor)
+    ]
+    assert len(site_entities) == len(SITE_SENSOR_DESCRIPTIONS)
+    temperature = next(
+        entity
+        for entity in site_entities
+        if entity.entity_description.key == "current_outdoor_temperature"
+    )
+    assert temperature.unique_id == "site_100_current_outdoor_temperature"
+    assert temperature.native_value == 20.5
+    assert temperature.device_info["name"] == "Home"
+    assert "123 Private Street" not in str(temperature.device_info)
+    assert "40.1" not in str(temperature.device_info)
+    assert (
+        registry.async_get(retained.entity_id).unique_id
+        == "site_100_current_outdoor_temperature"
+    )
+    assert registry.async_get(duplicate.entity_id) is None
+
+
+def test_site_and_device_registry_identity_survive_renames_and_missing_sites() -> None:
+    """Stable IDs do not depend on a site name and missing sites are unavailable."""
+    device = DeviceState("SERIAL-001", "Device", "FireSensor", 100)
+    site = Site(100, 42, "Original")
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.data = {device.serial_number: device}
+    coordinator.sites = {site.id: site}
+    entity = WhiskerSiteSensor(coordinator, site.id, SITE_SENSOR_DESCRIPTIONS[0])
+    device_entity = WhiskerSensor(
+        coordinator, device.serial_number, SENSOR_DESCRIPTIONS[0]
+    )
+
+    assert entity.unique_id == "site_100_current_outdoor_temperature"
+    assert device_entity.device_info["via_device"] == (DOMAIN, "site_100")
+    site.display_name = "Renamed"
+    assert entity.unique_id == "site_100_current_outdoor_temperature"
+    assert entity.device_info["name"] == "Renamed"
+    coordinator.sites = {}
+    assert not entity.available
 
 
 def test_only_realtime_entities_become_unavailable_on_stream_loss() -> None:

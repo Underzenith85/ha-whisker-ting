@@ -7,7 +7,7 @@ An unofficial Home Assistant integration for monitoring [Whisker Labs Ting](http
 > [!WARNING]
 > This is an independent community project. It is not created, maintained, affiliated with, authorized by, or endorsed by Whisker Labs, Inc. Ting and Whisker Labs are trademarks of their respective owner.
 
-The integration provides read-only access to Ting account, device, hazard, frozen-pipe, notification, current-condition, and real-time electrical data. Integration version 1.2.0 is aligned with the Ting 3.0.4 service behavior.
+The integration provides read-only access to Ting account, device, hazard, frozen-pipe, notification, current-condition, and real-time electrical data. Integration version 1.3.0 is aligned with the Ting 3.0.4 service behavior.
 
 > [!IMPORTANT]
 > This integration is not currently included in HACS's default repository list. Add
@@ -74,6 +74,10 @@ Current temperature, outage risk, hazard state, and other device conditions are 
 
 Some diagnostic entities are disabled by default and can be enabled from the device page.
 
+Each stable Ting site is represented as a separate Home Assistant device. Ting sensor
+devices are linked beneath their site device. Site names may change without changing
+registry identity, and precise coordinates and street addresses are not exposed.
+
 ### Sensors
 
 | Entity | Default | Description |
@@ -95,8 +99,8 @@ Some diagnostic entities are disabled by default and can be enabled from the dev
 | Unverified fire hazard message | Enabled | UFH status message |
 | Frozen pipe risk level | Enabled | Detailed frozen-pipe risk level when supported |
 | Frozen pipe outdoor temperature | Disabled | Outdoor temperature associated with frozen-pipe evaluation |
-| Current outdoor temperature | Enabled | Current site temperature from the Ting conditions snapshot |
-| Current outage risk | Disabled | Bounded site-level outage-risk status and diagnostic attributes |
+| Current outdoor temperature | Enabled | Current temperature on the associated Ting site device |
+| Current outage risk | Disabled | Bounded outage-risk status and diagnostics on the Ting site device |
 | Frozen pipe detected location | Disabled | Conditioned, unconditioned, or unknown-space classification |
 | Frozen pipe last event | Disabled | Latest modeled frozen-pipe event timestamp |
 | Latest event | Enabled | Latest read-only Ting notification for the device |

@@ -169,6 +169,10 @@ class Site:
     country: str | None = None
     latitude: float | None = None
     longitude: float | None = None
+    current_temperature_c: float | None = None
+    current_outage_risk: (
+        str | int | float | dict[str, str | int | float | bool] | None
+    ) = None
 
 
 @dataclass
