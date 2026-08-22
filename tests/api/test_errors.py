@@ -185,6 +185,29 @@ def test_optional_endpoint_preserves_account_auth_failures(
     asyncio.run(scenario())
 
 
+def test_optional_capability_tracks_only_explicit_authorization_failures() -> None:
+    """Unsupported and temporary failures remain distinct from removed access."""
+
+    async def scenario() -> None:
+        client = _client(FakeSession())
+        client._request = AsyncMock(side_effect=api.WhiskerAuthorizationError("denied"))
+        assert (
+            await client._get_optional_data("/optional", capability="event_history")
+            is None
+        )
+        assert client.unauthorized_capabilities == {"event_history"}
+
+        client._request = AsyncMock(side_effect=api.WhiskerServiceError("temporary"))
+        await client._get_optional_data("/optional", capability="event_history")
+        assert client.unauthorized_capabilities == {"event_history"}
+
+        client._request = AsyncMock(side_effect=api.WhiskerNotFoundError("unsupported"))
+        await client._get_optional_data("/optional", capability="event_history")
+        assert not client.unauthorized_capabilities
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "failure_factory",
     [api.WhiskerAuthError, api.WhiskerConnectionError],

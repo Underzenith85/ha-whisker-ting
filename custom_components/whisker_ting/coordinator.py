@@ -19,6 +19,7 @@ from .api import (
     WhiskerAuthError,
 )
 from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
+from .repairs import WhiskerRepairManager
 from .stream import (
     PowerQualityCategory,
     PowerQualityData,
@@ -42,6 +43,7 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
         client: WhiskerApiClient,
         session: aiohttp.ClientSession,
         update_interval_seconds: int = DEFAULT_SCAN_INTERVAL,
+        repair_manager: WhiskerRepairManager | None = None,
     ) -> None:
         """Initialize the coordinator."""
         super().__init__(
@@ -57,6 +59,7 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
         self._last_stream_listener_update = 0.0
         self._stream_update_handle: asyncio.TimerHandle | None = None
         self.sites: dict[int, Site] = {}
+        self.repair_manager = repair_manager
 
     @callback
     def _schedule_stream_listener_update(self) -> None:
@@ -337,10 +340,18 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
                                 average_peaks_max=voltage_data.average_peaks_max,
                             )
 
+            if self.repair_manager:
+                self.repair_manager.clear_authentication_issue()
+                capabilities = getattr(
+                    self.client, "unauthorized_capabilities", frozenset()
+                )
+                self.repair_manager.evaluate(data.values(), capabilities)
             return data
         except WhiskerAuthError as err:
             self._last_update_success = False
             self._mark_rest_unhealthy()
+            if self.repair_manager:
+                self.repair_manager.create_authentication_issue()
             raise ConfigEntryAuthFailed(
                 "Authentication failed - credentials may have changed"
             ) from err
