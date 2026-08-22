@@ -63,6 +63,21 @@
       },
       "is_owner": {
         "name": "Is Owner"
+      },
+      "power_outage": {
+        "name": "Power outage"
+      },
+      "generator_running": {
+        "name": "Generator running"
+      },
+      "recurring_power_quality_problem": {
+        "name": "Recurring power-quality problem"
+      },
+      "no_grounding": {
+        "name": "No grounding"
+      },
+      "device_online": {
+        "name": "Device online"
       }
     },
     "sensor": {
@@ -171,6 +186,15 @@
       "last_no_grounding_warning": {
         "name": "Last no-grounding warning"
       },
+      "last_grounding_restoration": {
+        "name": "Last grounding restoration"
+      },
+      "last_power_quality_problem": {
+        "name": "Last power-quality problem"
+      },
+      "last_power_quality_restoration": {
+        "name": "Last power-quality restoration"
+      },
       "last_high_temperature_alert": {
         "name": "Last high-temperature alert"
       },
@@ -188,6 +212,13 @@
       },
       "last_device_offline": {
         "name": "Last device offline"
+      },
+      "voltage_condition": {
+        "name": "Voltage condition",
+        "state": {
+          "sag": "Sag",
+          "swell": "Swell"
+        }
       },
       "hazard_severity_level": {
         "name": "Hazard Severity Level"

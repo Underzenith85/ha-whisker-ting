@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
@@ -15,9 +16,9 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .api import DeviceState
+from .api import DeviceState, Site, TingEvent
 from .coordinator import WhiskerDataUpdateCoordinator
-from .entity import WhiskerEntity
+from .entity import WhiskerEntity, WhiskerSiteEntity
 
 PARALLEL_UPDATES = 0  # Coordinator handles all updates
 
@@ -26,7 +27,50 @@ PARALLEL_UPDATES = 0  # Coordinator handles all updates
 class WhiskerBinarySensorEntityDescription(BinarySensorEntityDescription):
     """Describes a Whisker Ting binary sensor entity."""
 
-    value_fn: Callable[[DeviceState], bool]
+    value_fn: Callable[[DeviceState], bool | None]
+
+
+@dataclass(frozen=True, kw_only=True)
+class WhiskerSiteBinarySensorEntityDescription(BinarySensorEntityDescription):
+    """Describe a Whisker Ting site binary sensor entity."""
+
+    value_fn: Callable[[Site], bool | None]
+
+
+EVENT_CONDITION_DESCRIPTIONS: tuple[
+    tuple[str, BinarySensorDeviceClass, frozenset[str], frozenset[str]], ...
+] = (
+    (
+        "power_outage",
+        BinarySensorDeviceClass.PROBLEM,
+        frozenset({"power_outage"}),
+        frozenset({"power_restored"}),
+    ),
+    (
+        "generator_running",
+        BinarySensorDeviceClass.RUNNING,
+        frozenset({"generator_on"}),
+        frozenset({"generator_off"}),
+    ),
+    (
+        "recurring_power_quality_problem",
+        BinarySensorDeviceClass.PROBLEM,
+        frozenset({"power_quality_problem"}),
+        frozenset({"power_quality_restored"}),
+    ),
+    (
+        "no_grounding",
+        BinarySensorDeviceClass.PROBLEM,
+        frozenset({"no_grounding"}),
+        frozenset({"grounding_restored"}),
+    ),
+    (
+        "device_online",
+        BinarySensorDeviceClass.CONNECTIVITY,
+        frozenset({"device_online"}),
+        frozenset({"device_offline"}),
+    ),
+)
 
 
 BINARY_SENSOR_DESCRIPTIONS: tuple[WhiskerBinarySensorEntityDescription, ...] = (
@@ -85,7 +129,51 @@ BINARY_SENSOR_DESCRIPTIONS: tuple[WhiskerBinarySensorEntityDescription, ...] = (
         entity_registry_enabled_default=False,
         value_fn=lambda state: state.is_owner,
     ),
+    *(
+        WhiskerBinarySensorEntityDescription(
+            key=key,
+            translation_key=key,
+            device_class=device_class,
+            value_fn=lambda state, on=on, off=off: _event_condition(
+                state.events, on, off
+            ),
+        )
+        for key, device_class, on, off in EVENT_CONDITION_DESCRIPTIONS
+    ),
 )
+
+
+SITE_BINARY_SENSOR_DESCRIPTIONS: tuple[
+    WhiskerSiteBinarySensorEntityDescription, ...
+] = tuple(
+    WhiskerSiteBinarySensorEntityDescription(
+        key=key,
+        translation_key=key,
+        device_class=device_class,
+        value_fn=lambda site, on=on, off=off: _event_condition(site.events, on, off),
+    )
+    for key, device_class, on, off in EVENT_CONDITION_DESCRIPTIONS
+)
+
+
+def _event_condition(
+    events: list[TingEvent], on_kinds: frozenset[str], off_kinds: frozenset[str]
+) -> bool | None:
+    """Return state from the newest valid explicit transition."""
+    matches: list[tuple[datetime, bool]] = []
+    for event in events:
+        if event.event_kind not in on_kinds | off_kinds:
+            continue
+        try:
+            timestamp = datetime.fromisoformat(
+                event.timestamp_utc.replace("Z", "+00:00")
+            )
+        except ValueError:
+            continue
+        matches.append((timestamp, event.event_kind in on_kinds))
+    if not matches:
+        return None
+    return max(matches, key=lambda item: item[0])[1]
 
 
 async def async_setup_entry(
@@ -96,7 +184,7 @@ async def async_setup_entry(
     """Set up Whisker Ting binary sensors from a config entry."""
     coordinator = entry.runtime_data
 
-    entities: list[WhiskerBinarySensor] = []
+    entities: list[WhiskerBinarySensor | WhiskerSiteBinarySensor] = []
     for device_id in coordinator.data:
         for description in BINARY_SENSOR_DESCRIPTIONS:
             entities.append(
@@ -106,6 +194,10 @@ async def async_setup_entry(
                     description=description,
                 )
             )
+
+    for site_id in coordinator.sites:
+        for description in SITE_BINARY_SENSOR_DESCRIPTIONS:
+            entities.append(WhiskerSiteBinarySensor(coordinator, site_id, description))
 
     async_add_entities(entities)
 
@@ -132,3 +224,24 @@ class WhiskerBinarySensor(WhiskerEntity, BinarySensorEntity):
         if device_state is None:
             return None
         return self.entity_description.value_fn(device_state)
+
+
+class WhiskerSiteBinarySensor(WhiskerSiteEntity, BinarySensorEntity):
+    """Represent an event-derived condition for one Ting site."""
+
+    entity_description: WhiskerSiteBinarySensorEntityDescription
+
+    def __init__(
+        self,
+        coordinator: WhiskerDataUpdateCoordinator,
+        site_id: int,
+        description: WhiskerSiteBinarySensorEntityDescription,
+    ) -> None:
+        """Initialize the site condition sensor."""
+        super().__init__(coordinator, site_id, description)
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return the newest explicit condition state."""
+        site = self.site_state
+        return self.entity_description.value_fn(site) if site else None

@@ -8,9 +8,13 @@ from custom_components.whisker_ting.api import (
     DeviceState,
     FireHazardStatus,
     HazardStatus,
+    TingEvent,
 )
 from custom_components.whisker_ting.binary_sensor import BINARY_SENSOR_DESCRIPTIONS
-from custom_components.whisker_ting.sensor import _get_hazard_status
+from custom_components.whisker_ting.sensor import (
+    SENSOR_DESCRIPTIONS,
+    _get_hazard_status,
+)
 
 
 def _device(
@@ -80,3 +84,59 @@ def test_binary_hazards_follow_known_status_values() -> None:
     assert not descriptions["unverified_fire_hazard"].value_fn(electrical)
     assert not descriptions["electrical_fire_hazard"].value_fn(power_quality)
     assert descriptions["unverified_fire_hazard"].value_fn(power_quality)
+
+
+def test_event_conditions_use_only_the_newest_valid_explicit_transition() -> None:
+    """Clears, malformed records, missing history, and future types fail safely."""
+    descriptions = {item.key: item for item in BINARY_SENSOR_DESCRIPTIONS}
+    device = _device()
+    assert descriptions["power_outage"].value_fn(device) is None
+
+    device.events = [
+        TingEvent(
+            "FutureEvent",
+            "2026-08-22T12:00:00+00:00",
+            event_kind=None,
+        ),
+        TingEvent(
+            "PowerRestored",
+            "2026-08-22T11:00:00+00:00",
+            event_kind="power_restored",
+        ),
+        TingEvent(
+            "PowerOutage",
+            "malformed",
+            event_kind="power_outage",
+        ),
+        TingEvent(
+            "PowerOutage",
+            "2026-08-22T10:00:00+00:00",
+            event_kind="power_outage",
+        ),
+    ]
+
+    assert descriptions["power_outage"].value_fn(device) is False
+    assert descriptions["generator_running"].value_fn(device) is None
+
+
+def test_voltage_condition_distinguishes_latest_sag_from_swell() -> None:
+    """Voltage excursions remain an enum because no normal transition is known."""
+    description = next(
+        item for item in SENSOR_DESCRIPTIONS if item.key == "voltage_condition"
+    )
+    device = _device()
+    assert description.value_fn(device) is None
+    device.events = [
+        TingEvent(
+            "VoltageSag",
+            "2026-08-22T10:00:00+00:00",
+            event_kind="voltage_sag",
+        ),
+        TingEvent(
+            "VoltageSwell",
+            "2026-08-22T11:00:00+00:00",
+            event_kind="voltage_swell",
+        ),
+    ]
+
+    assert description.value_fn(device) == "swell"

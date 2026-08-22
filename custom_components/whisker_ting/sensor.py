@@ -40,6 +40,9 @@ STRUCTURED_EVENT_KINDS: tuple[tuple[str, str], ...] = (
     ("last_voltage_sag", "voltage_sag"),
     ("last_voltage_swell", "voltage_swell"),
     ("last_no_grounding_warning", "no_grounding"),
+    ("last_grounding_restoration", "grounding_restored"),
+    ("last_power_quality_problem", "power_quality_problem"),
+    ("last_power_quality_restoration", "power_quality_restored"),
     ("last_high_temperature_alert", "high_temperature"),
     ("last_low_temperature_alert", "low_temperature"),
     ("last_fire_event", "fire_event"),
@@ -90,6 +93,13 @@ SITE_SENSOR_DESCRIPTIONS: tuple[WhiskerSiteSensorEntityDescription, ...] = (
         translation_key="latest_event",
         value_fn=lambda site: site.events[0].event_type if site.events else None,
         attributes_fn=lambda site: _event_attributes(site.events),
+    ),
+    WhiskerSiteSensorEntityDescription(
+        key="voltage_condition",
+        translation_key="voltage_condition",
+        device_class=SensorDeviceClass.ENUM,
+        options=["sag", "swell"],
+        value_fn=lambda site: _latest_voltage_condition(site.events),
     ),
     *(
         WhiskerSiteSensorEntityDescription(
@@ -285,6 +295,13 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
         attributes_fn=lambda state: _event_attributes(state.events),
     ),
     WhiskerSensorEntityDescription(
+        key="voltage_condition",
+        translation_key="voltage_condition",
+        device_class=SensorDeviceClass.ENUM,
+        options=["sag", "swell"],
+        value_fn=lambda state: _latest_voltage_condition(state.events),
+    ),
+    WhiskerSensorEntityDescription(
         key="stream_health",
         translation_key="stream_health",
         device_class=SensorDeviceClass.ENUM,
@@ -441,6 +458,25 @@ def _event_timestamp(events: list[TingEvent], event_kind: str) -> datetime | Non
         except ValueError:
             continue
     return max(timestamps, default=None)
+
+
+def _latest_voltage_condition(events: list[TingEvent]) -> str | None:
+    """Return sag or swell from the newest explicitly classified voltage event."""
+    matches: list[tuple[datetime, str]] = []
+    values = {"voltage_sag": "sag", "voltage_swell": "swell"}
+    for event in events:
+        if event.event_kind not in values:
+            continue
+        try:
+            timestamp = datetime.fromisoformat(
+                event.timestamp_utc.replace("Z", "+00:00")
+            )
+        except ValueError:
+            continue
+        matches.append((timestamp, values[event.event_kind]))
+    if not matches:
+        return None
+    return max(matches, key=lambda item: item[0])[1]
 
 
 def _get_hazard_status(state: DeviceState) -> str:
