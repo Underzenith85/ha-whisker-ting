@@ -206,6 +206,11 @@ SignalR framing and the Ting-specific real-time client, parsers, models, and man
 surface live in `custom_components/whisker_ting/stream/`. Stream protocol tests live
 in `tests/stream/` and remain fully offline.
 
+Cognito network orchestration and pure SRP-6a calculations are separated under
+`custom_components/whisker_ting/auth/`. SRP uses Cognito's required SHA-256 protocol
+primitive; it does not store password hashes. No additional authentication dependency
+is used.
+
 ## Support
 
 Report integration problems through the [issue tracker](https://github.com/Underzenith85/ha-whisker-ting/issues).
