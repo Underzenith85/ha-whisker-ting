@@ -114,6 +114,9 @@
           "stopped": "Stopped"
         }
       },
+      "latest_event": {
+        "name": "Latest Event"
+      },
       "device_type": {
         "name": "Device Type"
       },

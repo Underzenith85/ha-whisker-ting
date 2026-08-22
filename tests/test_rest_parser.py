@@ -16,11 +16,10 @@ ROOT = Path(__file__).parents[1]
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def _fixture(name: str) -> dict[str, Any]:
+def _fixture(name: str) -> Any:
     """Load a sanitized REST fixture."""
     with (FIXTURES / name).open(encoding="utf-8") as file:
         value = json.load(file)
-    assert isinstance(value, dict)
     return value
 
 
@@ -171,3 +170,37 @@ async def test_optional_endpoint_failure_returns_empty_data() -> None:
 
     assert result.status is None
     assert result.history == []
+
+
+def test_event_history_is_scoped_normalized_and_sorted() -> None:
+    """Unknown event types survive while malformed and unscoped data is omitted."""
+    events = _client()._parse_event_history(_fixture("notification_history.json"))
+
+    assert [event.event_id for event in events] == [
+        "event-new",
+        "other-station",
+        "event-old",
+    ]
+    assert events[2].event_type == "FutureEventType"
+    assert events[2].timestamp_utc == "2026-08-20T00:00:00+00:00"
+    assert not hasattr(events[0], "statuses")
+
+
+@pytest.mark.asyncio
+async def test_event_history_request_is_read_only_and_bounded() -> None:
+    """History retrieval supplies a bounded date window and exclusion flags."""
+    client = _client()
+    client._user_id = 42
+    client._get_optional_data = AsyncMock(
+        return_value=_fixture("notification_history.json")
+    )
+
+    events = await client.get_event_history(days=30)
+
+    assert len(events) == 3
+    endpoint = client._get_optional_data.await_args.args[0]
+    params = client._get_optional_data.await_args.kwargs["params"]
+    assert endpoint == "/api/v1/Notifications/history/42"
+    assert params["excludeStatuses"] == "true"
+    assert params["excludeCleared"] == "false"
+    assert params["sentStartUtc"] < params["sentEndUtc"]

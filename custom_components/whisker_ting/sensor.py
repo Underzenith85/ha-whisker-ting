@@ -36,6 +36,7 @@ class WhiskerSensorEntityDescription(SensorEntityDescription):
     """Describes a Whisker Ting sensor entity."""
 
     value_fn: Callable[[DeviceState], Any]
+    attributes_fn: Callable[[DeviceState], dict[str, Any] | None] | None = None
 
 
 SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
@@ -168,6 +169,12 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
         value_fn=lambda state: _get_frozen_pipe_last_event(state),
     ),
     WhiskerSensorEntityDescription(
+        key="latest_event",
+        translation_key="latest_event",
+        value_fn=lambda state: state.events[0].event_type if state.events else None,
+        attributes_fn=lambda state: _event_attributes(state),
+    ),
+    WhiskerSensorEntityDescription(
         key="stream_health",
         translation_key="stream_health",
         device_class=SensorDeviceClass.ENUM,
@@ -243,6 +250,21 @@ def _get_frozen_pipe_last_event(state: DeviceState) -> datetime | None:
         except ValueError:
             continue
     return max(timestamps, default=None)
+
+
+def _event_attributes(state: DeviceState) -> dict[str, Any] | None:
+    """Return normalized attributes for the newest station event."""
+    if not state.events:
+        return None
+    event = state.events[0]
+    return {
+        "event_id": event.event_id,
+        "category": event.category,
+        "timestamp": event.timestamp_utc,
+        "title": event.title,
+        "message": event.message,
+        "history_count": len(state.events),
+    }
 
 
 def _get_hazard_status(state: DeviceState) -> str:
@@ -336,3 +358,11 @@ class WhiskerSensor(CoordinatorEntity[WhiskerDataUpdateCoordinator], SensorEntit
         if device_state is None:
             return None
         return self.entity_description.value_fn(device_state)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return optional modeled attributes for this entity."""
+        device_state = self.coordinator.data.get(self._device_id)
+        if device_state is None or self.entity_description.attributes_fn is None:
+            return None
+        return self.entity_description.attributes_fn(device_state)

@@ -188,6 +188,12 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
         try:
             data = await self.client.get_all_device_states()
 
+            events = await self.client.get_event_history()
+            for event in events:
+                device = data.get(event.serial_number)
+                if device is not None:
+                    device.events.append(event)
+
             frozen_pipe_results = await asyncio.gather(
                 *(
                     self.client.get_frozen_pipe_data(device.serial_number)
