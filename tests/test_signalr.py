@@ -229,3 +229,72 @@ def test_extract_completion_rejects_malformed_messages(
     """Malformed Completion messages raise a protocol error."""
     with pytest.raises(signalr.SignalRProtocolError):
         signalr.extract_completions(signalr.encode_hub_message(message))
+
+
+def test_decode_successful_handshake() -> None:
+    """A successful handshake is an empty JSON object terminated by RS."""
+    assert signalr.decode_handshake_response("{}\x1e") is None
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "{}",
+        "not-json\x1e",
+        "[]\x1e",
+        "{}\x1e{}\x1e",
+        '{"unexpected":true}\x1e',
+    ],
+)
+def test_decode_handshake_rejects_malformed_responses(response: str) -> None:
+    """Malformed, unterminated, and unexpected handshakes fail structurally."""
+    with pytest.raises(signalr.SignalRHandshakeError):
+        signalr.decode_handshake_response(response)
+
+
+def test_decode_handshake_rejects_server_error_without_exposing_it() -> None:
+    """Handshake errors fail without retaining the server-provided value."""
+    secret = "authorization=secret-value"
+    with pytest.raises(signalr.SignalRHandshakeError) as raised:
+        signalr.decode_handshake_response(f'{{"error":"{secret}"}}\x1e')
+    assert secret not in str(raised.value)
+
+
+def test_extract_ping_structurally() -> None:
+    """Ping recognition uses the decoded hub type, not raw byte equality."""
+    ping = signalr.encode_hub_message([signalr.MSG_TYPE_PING])
+    ping_count, closes = signalr.extract_control_messages(ping + ping)
+    assert ping_count == 2
+    assert closes == []
+
+
+def test_extract_close_sanitizes_reason_and_reconnect_flag() -> None:
+    """Close parsing retains reconnect intent while redacting credentials."""
+    frame = signalr.encode_hub_message(
+        [signalr.MSG_TYPE_CLOSE, "authorization: secret-value", True]
+    )
+    ping_count, closes = signalr.extract_control_messages(frame)
+
+    assert ping_count == 0
+    assert closes == [
+        signalr.CloseMessage(
+            reason="authorization=[redacted]", allow_reconnect=True
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        [6, "unexpected"],
+        [7, {"bad": "reason"}],
+        [7, None, "yes"],
+        [7, None, True, "extra"],
+    ],
+)
+def test_extract_control_rejects_malformed_messages(
+    message: list[object],
+) -> None:
+    """Malformed Ping and Close messages are protocol failures."""
+    with pytest.raises(signalr.SignalRProtocolError):
+        signalr.extract_control_messages(signalr.encode_hub_message(message))
