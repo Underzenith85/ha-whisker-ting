@@ -72,6 +72,7 @@ class WhiskerWebSocket:
     # Consider data stale if no update in 30 seconds (normally updates every ~250ms)
     STALE_DATA_THRESHOLD = 30
     INVOCATION_TIMEOUT = 10.0
+    UNSUBSCRIBE_TIMEOUT = 5.0
 
     def __init__(
         self,
@@ -151,6 +152,27 @@ class WhiskerWebSocket:
         """Initialize the device stream and mark it subscribed on success."""
         await self._invoke("InitializeStreaming", args)
         self._subscribed = True
+
+    def _stream_args(self) -> list[Any]:
+        """Return the server arguments that identify this station stream."""
+        return [
+            {"StationId": self._station_id, "DataElement": "ComboBinaryData"},
+            self._api_key,
+            str(self._user_id),
+        ]
+
+    async def _unsubscribe(self) -> None:
+        """Release an initialized station stream and wait for Completion."""
+        if not self._subscribed:
+            return
+        try:
+            await self._invoke(
+                "UnInitializeStreaming",
+                self._stream_args(),
+                timeout=self.UNSUBSCRIBE_TIMEOUT,
+            )
+        finally:
+            self._subscribed = False
 
     def _handle_completions(self, data: bytes) -> None:
         """Resolve pending invocations represented in a binary message."""
@@ -283,12 +305,7 @@ class WhiskerWebSocket:
             self._receive_task = asyncio.create_task(self._receive_loop())
 
             # Subscribe to device stream using api_key as the token
-            init_args = [
-                {"StationId": self._station_id, "DataElement": "ComboBinaryData"},
-                self._api_key,  # Use api_key directly as the stream token
-                str(self._user_id),
-            ]
-            await self._subscribe(init_args)
+            await self._subscribe(self._stream_args())
 
             # Start remaining background tasks after subscription succeeds
             self._ping_task = asyncio.create_task(self._ping_loop())
@@ -326,14 +343,44 @@ class WhiskerWebSocket:
 
     async def disconnect(self) -> None:
         """Disconnect from the SignalR hub."""
+        if self._shutting_down and self._ws is None:
+            return
         self._shutting_down = True
+
+        # Keep the receive loop alive until it can correlate the unsubscribe
+        # Completion. Teardown failure must never prevent transport cleanup.
+        for task in (self._ping_task, self._stale_check_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        self._ping_task = None
+        self._stale_check_task = None
+
+        if (
+            self._connected
+            and self._subscribed
+            and self._ws is not None
+            and not self._ws.closed
+        ):
+            try:
+                await self._unsubscribe()
+            except Exception as err:
+                _LOGGER.debug(
+                    "Unable to release SignalR stream for station %s: %s",
+                    self._station_id,
+                    err,
+                )
+
         self._connected = False
         self._subscribed = False
         self._fail_pending_invocations(
             SignalRInvocationError("WebSocket disconnected")
         )
 
-        for task in [self._ping_task, self._receive_task, self._stale_check_task]:
+        for task in [self._receive_task]:
             if task:
                 task.cancel()
                 try:
@@ -341,9 +388,7 @@ class WhiskerWebSocket:
                 except asyncio.CancelledError:
                     pass
 
-        self._ping_task = None
         self._receive_task = None
-        self._stale_check_task = None
 
         if self._ws and not self._ws.closed:
             await self._ws.close()
