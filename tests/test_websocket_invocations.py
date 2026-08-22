@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -242,6 +243,7 @@ def test_manager_reconnect_uses_exponential_backoff() -> None:
 
         with (
             patch.object(websocket.asyncio, "sleep", sleep),
+            patch.object(websocket.random, "uniform", return_value=2),
             patch.object(
                 websocket, "WhiskerWebSocket", return_value=replacement
             ),
@@ -249,8 +251,89 @@ def test_manager_reconnect_uses_exponential_backoff() -> None:
             manager._handle_disconnect("ABC123", "transport closed", True)
             await manager._reconnect_tasks["ABC123"]
 
-        sleep.assert_awaited_once_with(20)
+        sleep.assert_awaited_once_with(22)
         assert manager._reconnect_attempts["ABC123"] == 3
         assert manager._connections["ABC123"] is replacement
+
+    asyncio.run(scenario())
+
+
+def test_multi_device_station_state_is_independent() -> None:
+    """One station can lose liveness without affecting another station."""
+
+    async def scenario() -> None:
+        availability: list[tuple[str, bool]] = []
+        manager = websocket.WhiskerWebSocketManager(
+            object(), on_availability_update=lambda station, live: availability.append(
+                (station, live)
+            )
+        )
+        clients = [MagicMock(connected=True), MagicMock(connected=True)]
+        for client in clients:
+            client.connect = AsyncMock(return_value=True)
+
+        with patch.object(websocket, "WhiskerWebSocket", side_effect=clients):
+            assert await manager.connect_device("key", 42, "STATION-A")
+            assert await manager.connect_device("key", 42, "STATION-B")
+
+        reading = websocket.VoltageData(datetime.now(UTC), 120, 121, 119, 4)
+        manager._handle_voltage_update("STATION-A", reading)
+        assert manager.is_station_available("STATION-A")
+        assert not manager.is_station_available("STATION-B")
+
+        manager._handle_voltage_update("STATION-B", reading)
+        manager._handle_disconnect("STATION-A", "stale", False)
+        assert not manager.is_station_available("STATION-A")
+        assert manager.is_station_available("STATION-B")
+        assert availability == [
+            ("STATION-A", True),
+            ("STATION-B", True),
+            ("STATION-A", False),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_duplicate_disconnect_schedules_one_reconnect_task() -> None:
+    """Competing stale and receive-loop paths cannot create duplicate retries."""
+
+    async def scenario() -> None:
+        manager = websocket.WhiskerWebSocketManager(object())
+        reconnect = AsyncMock()
+        manager._reconnect_with_backoff = reconnect
+
+        manager._handle_disconnect("ABC123", "stale", True)
+        task = manager._reconnect_tasks["ABC123"]
+        manager._handle_disconnect("ABC123", "transport", True)
+
+        assert manager._reconnect_tasks["ABC123"] is task
+        await task
+        reconnect.assert_awaited_once_with("ABC123")
+
+    asyncio.run(scenario())
+
+
+def test_disconnect_cancels_tasks_and_closes_socket() -> None:
+    """Client shutdown leaves no background task or transport running."""
+
+    async def scenario() -> None:
+        client, transport = _client()
+        client._ping_task = asyncio.create_task(asyncio.sleep(60))
+        client._receive_task = asyncio.create_task(asyncio.sleep(60))
+        client._stale_check_task = asyncio.create_task(asyncio.sleep(60))
+        tasks = [
+            client._ping_task,
+            client._receive_task,
+            client._stale_check_task,
+        ]
+
+        await client.disconnect()
+
+        assert transport.closed
+        assert all(task.done() for task in tasks)
+        assert client._ws is None
+        assert client._ping_task is None
+        assert client._receive_task is None
+        assert client._stale_check_task is None
 
     asyncio.run(scenario())

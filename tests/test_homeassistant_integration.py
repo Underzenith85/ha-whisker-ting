@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -34,6 +36,7 @@ from custom_components.whisker_ting.coordinator import (
     WhiskerDataUpdateCoordinator,
 )
 from custom_components.whisker_ting.sensor import SENSOR_DESCRIPTIONS, WhiskerSensor
+from custom_components.whisker_ting.websocket import VoltageData
 
 
 @pytest.mark.asyncio
@@ -125,11 +128,29 @@ def test_entity_availability_tracks_coordinator_device_membership(
     coordinator = MagicMock()
     coordinator.last_update_success = True
     coordinator.data = {device.serial_number: device}
+    coordinator.is_realtime_available.return_value = True
     entity = entity_class(coordinator, device.serial_number, description)
 
     assert entity.available
     coordinator.data = {}
     assert not entity.available
+
+
+def test_only_realtime_entities_become_unavailable_on_stream_loss() -> None:
+    """A frozen voltage is hidden while REST-backed device state stays available."""
+    device = DeviceState("SERIAL-001", "Fixture device", "FireSensor", 1)
+    device.voltage.voltage = 120.0
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.data = {device.serial_number: device}
+    coordinator.is_realtime_available.return_value = False
+
+    voltage = WhiskerSensor(coordinator, device.serial_number, SENSOR_DESCRIPTIONS[0])
+    hazard = WhiskerSensor(coordinator, device.serial_number, SENSOR_DESCRIPTIONS[4])
+
+    assert voltage.native_value == 120.0
+    assert not voltage.available
+    assert hazard.available
 
 
 @pytest.mark.asyncio
@@ -151,6 +172,7 @@ async def test_coordinator_connects_stream_once_and_disconnects_on_shutdown(
     manager.wait_for_data = AsyncMock(return_value=False)
     manager.get_voltage_data.return_value = None
     manager.disconnect_all = AsyncMock()
+    manager.is_station_managed.side_effect = [False, True, True, True]
 
     with patch(
         "custom_components.whisker_ting.coordinator.WhiskerWebSocketManager",
@@ -186,3 +208,28 @@ async def test_coordinator_throttles_repeated_api_failure_logs(
         await coordinator._async_update_data()
 
     assert caplog.text.count("Unable to connect to Whisker Ting API") == 1
+
+
+@pytest.mark.asyncio
+async def test_voltage_listener_updates_are_throttled_to_one_hz(
+    hass: HomeAssistant,
+) -> None:
+    """Stream bursts retain the newest reading but notify at most once per second."""
+    device = DeviceState(
+        "SERIAL-001", "Fixture device", "FireSensor", 1, station_id="SERIAL-001"
+    )
+    coordinator = WhiskerDataUpdateCoordinator(hass, MagicMock(), MagicMock())
+    coordinator.data = {device.serial_number: device}
+    coordinator.async_set_updated_data = MagicMock()
+
+    for voltage in (120.0, 121.0, 122.0, 123.0):
+        coordinator._handle_voltage_update(
+            "SERIAL-001",
+            VoltageData(datetime.now(UTC), voltage, voltage + 1, voltage - 1, 4),
+        )
+
+    assert coordinator.async_set_updated_data.call_count == 1
+    assert device.voltage.voltage == 123.0
+    await asyncio.sleep(coordinator.STREAM_UPDATE_INTERVAL + 0.05)
+    assert coordinator.async_set_updated_data.call_count == 2
+    await coordinator.async_shutdown()

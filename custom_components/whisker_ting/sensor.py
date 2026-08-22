@@ -155,6 +155,13 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
     ),
 )
 
+REALTIME_SENSOR_KEYS = {
+    "voltage",
+    "voltage_high",
+    "voltage_low",
+    "average_peaks_max",
+}
+
 
 def _get_hazard_status(state: DeviceState) -> str:
     """Get the overall hazard status."""
@@ -234,7 +241,11 @@ class WhiskerSensor(CoordinatorEntity[WhiskerDataUpdateCoordinator], SensorEntit
     @property
     def available(self) -> bool:
         """Return if entity is available."""
-        return super().available and self._device_id in self.coordinator.data
+        if not super().available or self._device_id not in self.coordinator.data:
+            return False
+        if self.entity_description.key in REALTIME_SENSOR_KEYS:
+            return self.coordinator.is_realtime_available(self._device_id)
+        return True
 
     @property
     def native_value(self) -> Any:
