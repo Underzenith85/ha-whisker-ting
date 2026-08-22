@@ -23,6 +23,7 @@ from custom_components.whisker_ting.api import (
 from custom_components.whisker_ting.binary_sensor import (
     BINARY_SENSOR_DESCRIPTIONS,
     WhiskerBinarySensor,
+    WhiskerBinarySensorEntityDescription,
 )
 from custom_components.whisker_ting.const import (
     CONF_API_KEY,
@@ -35,12 +36,27 @@ from custom_components.whisker_ting.const import (
 from custom_components.whisker_ting.coordinator import (
     WhiskerDataUpdateCoordinator,
 )
-from custom_components.whisker_ting.sensor import SENSOR_DESCRIPTIONS, WhiskerSensor
+from custom_components.whisker_ting.sensor import (
+    SENSOR_DESCRIPTIONS,
+    WhiskerSensor,
+    WhiskerSensorEntityDescription,
+)
 from custom_components.whisker_ting.stream import (
     PowerQualityCategory,
     PowerQualityData,
     VoltageData,
 )
+
+
+@pytest.mark.parametrize(
+    "description", [*SENSOR_DESCRIPTIONS, *BINARY_SENSOR_DESCRIPTIONS]
+)
+def test_entity_descriptions_use_translation_keys(
+    description: WhiskerSensorEntityDescription | WhiskerBinarySensorEntityDescription,
+) -> None:
+    """Entity display names must come from Home Assistant translations."""
+    assert description.translation_key
+    assert not isinstance(description.name, str)
 
 
 @pytest.mark.asyncio

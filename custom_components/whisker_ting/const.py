@@ -37,7 +37,6 @@ CONF_SCAN_INTERVAL = "scan_interval"
 DEVICE_TYPE_FIRE_SENSOR = "FireSensor"
 
 # Hazard status values
-HAZARD_STATUS_NO_HAZARD = "No Hazards Detected"
 HAZARD_STATUS_REVIEWED_NOT_FIRE = "ReviewedNotFire"
 
 # Platforms

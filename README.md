@@ -10,7 +10,8 @@ An unofficial Home Assistant integration for monitoring [Whisker Labs Ting](http
 The integration provides read-only access to Ting account, device, hazard, frozen-pipe, notification, current-condition, and real-time electrical data. Integration version 1.1.0 is aligned with the Ting 3.0.4 service behavior.
 
 > [!IMPORTANT]
-> This integration is not currently published to HACS. Install it manually from this repository. Do not add it as a HACS custom repository yet.
+> This integration is not currently included in HACS's default repository list. Add
+> it as a HACS custom repository using the instructions below.
 
 ## Features
 
@@ -28,7 +29,19 @@ The account password is used to complete initial authentication and is not saved
 
 ## Installation
 
-### Manual installation
+### HACS custom repository (recommended)
+
+1. Open **HACS** in Home Assistant and select **Integrations**.
+2. Open the three-dot menu in the upper-right corner and select **Custom repositories**.
+3. Enter `https://github.com/Underzenith85/ha-whisker-ting` as the repository.
+4. Select **Integration** as the category, then select **Add**.
+5. Find **Whisker Ting** in HACS and select **Download**.
+6. Restart Home Assistant.
+
+This installs and tracks the integration through HACS, but it does not mean the
+project is published in or endorsed by HACS's default repository catalog.
+
+### Manual installation (fallback)
 
 1. Download or clone [this repository](https://github.com/Underzenith85/ha-whisker-ting).
 2. Copy `custom_components/whisker_ting` into your Home Assistant configuration directory:
