@@ -22,13 +22,11 @@ from homeassistant.const import (
     UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api import DeviceState
-from .const import DOMAIN
 from .coordinator import WhiskerDataUpdateCoordinator
+from .entity import WhiskerEntity
 
 PARALLEL_UPDATES = 0  # Coordinator handles all updates
 
@@ -426,7 +424,7 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class WhiskerSensor(CoordinatorEntity[WhiskerDataUpdateCoordinator], SensorEntity):
+class WhiskerSensor(WhiskerEntity, SensorEntity):
     """Representation of a Whisker Ting sensor."""
 
     entity_description: WhiskerSensorEntityDescription
@@ -439,33 +437,12 @@ class WhiskerSensor(CoordinatorEntity[WhiskerDataUpdateCoordinator], SensorEntit
         description: WhiskerSensorEntityDescription,
     ) -> None:
         """Initialize the sensor."""
-        super().__init__(coordinator)
-        self.entity_description = description
-        self._device_id = device_id
-        self._attr_unique_id = f"{device_id}_{description.key}"
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return device information."""
-        device_state = self.coordinator.data.get(self._device_id)
-        if device_state:
-            return DeviceInfo(
-                identifiers={(DOMAIN, self._device_id)},
-                name=device_state.name,
-                manufacturer="Whisker Labs",
-                model="Ting Fire Sensor",
-                sw_version=device_state.version,
-            )
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._device_id)},
-            name=self._device_id,
-            manufacturer="Whisker Labs",
-        )
+        super().__init__(coordinator, device_id, description)
 
     @property
     def available(self) -> bool:
         """Return if entity is available."""
-        if not super().available or self._device_id not in self.coordinator.data:
+        if not super().available:
             return False
         if self.entity_description.key in REALTIME_SENSOR_KEYS:
             return self.coordinator.is_realtime_available(self._device_id)
@@ -474,7 +451,7 @@ class WhiskerSensor(CoordinatorEntity[WhiskerDataUpdateCoordinator], SensorEntit
     @property
     def native_value(self) -> Any:
         """Return the state of the sensor."""
-        device_state = self.coordinator.data.get(self._device_id)
+        device_state = self.device_state
         if device_state is None:
             return None
         return self.entity_description.value_fn(device_state)
@@ -482,7 +459,7 @@ class WhiskerSensor(CoordinatorEntity[WhiskerDataUpdateCoordinator], SensorEntit
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Return optional modeled attributes for this entity."""
-        device_state = self.coordinator.data.get(self._device_id)
+        device_state = self.device_state
         if device_state is None or self.entity_description.attributes_fn is None:
             return None
         return self.entity_description.attributes_fn(device_state)
