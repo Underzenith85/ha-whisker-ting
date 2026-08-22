@@ -25,12 +25,28 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .api import DeviceState, Site
+from .api import DeviceState, Site, TingEvent
 from .const import DOMAIN
 from .coordinator import WhiskerDataUpdateCoordinator
 from .entity import WhiskerEntity, WhiskerSiteEntity
 
 PARALLEL_UPDATES = 0  # Coordinator handles all updates
+
+STRUCTURED_EVENT_KINDS: tuple[tuple[str, str], ...] = (
+    ("last_power_outage", "power_outage"),
+    ("last_power_restoration", "power_restored"),
+    ("last_generator_on", "generator_on"),
+    ("last_generator_off", "generator_off"),
+    ("last_voltage_sag", "voltage_sag"),
+    ("last_voltage_swell", "voltage_swell"),
+    ("last_no_grounding_warning", "no_grounding"),
+    ("last_high_temperature_alert", "high_temperature"),
+    ("last_low_temperature_alert", "low_temperature"),
+    ("last_fire_event", "fire_event"),
+    ("last_utility_fire_event", "utility_fire_event"),
+    ("last_device_online", "device_online"),
+    ("last_device_offline", "device_offline"),
+)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -68,6 +84,23 @@ SITE_SENSOR_DESCRIPTIONS: tuple[WhiskerSiteSensorEntityDescription, ...] = (
         attributes_fn=lambda site: _get_outage_risk_attributes(
             site.current_outage_risk
         ),
+    ),
+    WhiskerSiteSensorEntityDescription(
+        key="latest_event",
+        translation_key="latest_event",
+        value_fn=lambda site: site.events[0].event_type if site.events else None,
+        attributes_fn=lambda site: _event_attributes(site.events),
+    ),
+    *(
+        WhiskerSiteSensorEntityDescription(
+            key=key,
+            translation_key=key,
+            device_class=SensorDeviceClass.TIMESTAMP,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            entity_registry_enabled_default=False,
+            value_fn=lambda site, kind=kind: _event_timestamp(site.events, kind),
+        )
+        for key, kind in STRUCTURED_EVENT_KINDS
     ),
 )
 
@@ -249,7 +282,7 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
         key="latest_event",
         translation_key="latest_event",
         value_fn=lambda state: state.events[0].event_type if state.events else None,
-        attributes_fn=lambda state: _event_attributes(state),
+        attributes_fn=lambda state: _event_attributes(state.events),
     ),
     WhiskerSensorEntityDescription(
         key="stream_health",
@@ -307,6 +340,17 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
         value_fn=lambda state: state.group_name,
+    ),
+    *(
+        WhiskerSensorEntityDescription(
+            key=key,
+            translation_key=key,
+            device_class=SensorDeviceClass.TIMESTAMP,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            entity_registry_enabled_default=False,
+            value_fn=lambda state, kind=kind: _event_timestamp(state.events, kind),
+        )
+        for key, kind in STRUCTURED_EVENT_KINDS
     ),
 )
 
@@ -369,19 +413,34 @@ def _get_frozen_pipe_last_event(state: DeviceState) -> datetime | None:
     return max(timestamps, default=None)
 
 
-def _event_attributes(state: DeviceState) -> dict[str, Any] | None:
+def _event_attributes(events: list[TingEvent]) -> dict[str, Any] | None:
     """Return normalized attributes for the newest station event."""
-    if not state.events:
+    if not events:
         return None
-    event = state.events[0]
+    event = events[0]
     return {
         "event_id": event.event_id,
         "category": event.category,
         "timestamp": event.timestamp_utc,
         "title": event.title,
         "message": event.message,
-        "history_count": len(state.events),
+        "history_count": len(events),
     }
+
+
+def _event_timestamp(events: list[TingEvent], event_kind: str) -> datetime | None:
+    """Return the newest valid timestamp for an explicitly classified event."""
+    timestamps: list[datetime] = []
+    for event in events:
+        if event.event_kind != event_kind:
+            continue
+        try:
+            timestamps.append(
+                datetime.fromisoformat(event.timestamp_utc.replace("Z", "+00:00"))
+            )
+        except ValueError:
+            continue
+    return max(timestamps, default=None)
 
 
 def _get_hazard_status(state: DeviceState) -> str:
@@ -464,6 +523,11 @@ def _migrate_site_entities(
 
     for site_id in coordinator.sites:
         for description in SITE_SENSOR_DESCRIPTIONS:
+            if description.key not in {
+                "current_outdoor_temperature",
+                "current_outage_risk",
+            }:
+                continue
             new_unique_id = f"site_{site_id}_{description.key}"
             if registry.async_get_entity_id("sensor", DOMAIN, new_unique_id):
                 retained_entity_id = None

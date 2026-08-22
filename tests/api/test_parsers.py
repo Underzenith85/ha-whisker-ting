@@ -217,18 +217,24 @@ async def test_optional_endpoint_failure_returns_empty_data() -> None:
     assert result.history == []
 
 
-def test_event_history_is_scoped_normalized_and_sorted() -> None:
-    """Unknown event types survive while malformed and unscoped data is omitted."""
+def test_event_history_is_scoped_classified_deduplicated_and_sorted() -> None:
+    """Known and future events normalize while malformed records are omitted."""
     events = parsers.parse_event_history(_fixture("notification_history.json"))
 
     assert [event.event_id for event in events] == [
+        "site-outage",
         "event-new",
         "other-station",
         "event-old",
     ]
-    assert events[2].event_type == "FutureEventType"
-    assert events[2].timestamp_utc == "2026-08-20T00:00:00+00:00"
-    assert not hasattr(events[0], "statuses")
+    assert events[0].site_id == 100
+    assert events[0].serial_number is None
+    assert events[0].event_kind == "power_outage"
+    assert events[1].event_kind == "power_restored"
+    assert events[3].event_type == "FutureEventType"
+    assert events[3].event_kind is None
+    assert events[3].timestamp_utc == "2026-08-20T00:00:00+00:00"
+    assert not hasattr(events[1], "statuses")
 
 
 @pytest.mark.asyncio
@@ -242,7 +248,7 @@ async def test_event_history_request_is_read_only_and_bounded() -> None:
 
     events = await client.get_event_history(days=30)
 
-    assert len(events) == 3
+    assert len(events) == 4
     endpoint = client._get_optional_data.await_args.args[0]
     params = client._get_optional_data.await_args.kwargs["params"]
     assert endpoint == "/api/v1/Notifications/history/42"
