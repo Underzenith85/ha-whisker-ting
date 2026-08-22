@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import aiohttp
@@ -134,7 +134,11 @@ class WhiskerApiClient:
         self,
         session: aiohttp.ClientSession,
         username: str,
-        password: str,
+        password: str | None = None,
+        *,
+        refresh_token: str | None = None,
+        user_id: int | None = None,
+        api_key: str | None = None,
     ) -> None:
         """Initialize the API client."""
         self._session = session
@@ -144,10 +148,10 @@ class WhiskerApiClient:
 
         # Token storage
         self._access_token: str | None = None
-        self._refresh_token: str | None = None
+        self._refresh_token = refresh_token
         self._id_token: str | None = None
-        self._api_key: str | None = None
-        self._user_id: int | None = None
+        self._api_key = api_key
+        self._user_id = user_id
         self._token_expiry: datetime | None = None
         self._lock = asyncio.Lock()
 
@@ -161,12 +165,17 @@ class WhiskerApiClient:
         """Return the API key."""
         return self._api_key
 
+    @property
+    def refresh_token(self) -> str | None:
+        """Return the refresh token for config-entry persistence."""
+        return self._refresh_token
+
     async def _ensure_token(self) -> str:
         """Ensure we have a valid access token."""
         async with self._lock:
             if self._access_token and self._token_expiry:
                 # Refresh if token expires in less than 5 minutes
-                if datetime.now() < self._token_expiry - timedelta(minutes=5):
+                if datetime.now(UTC) < self._token_expiry - timedelta(minutes=5):
                     return self._access_token
 
             # Need to authenticate or refresh
@@ -174,9 +183,10 @@ class WhiskerApiClient:
                 try:
                     await self._refresh_access_token()
                     return self._access_token
-                except AuthenticationError:
+                except WhiskerAuthError:
                     # Refresh failed, try full auth
-                    pass
+                    if self._password is None:
+                        raise
 
             # Full authentication
             await self._authenticate()
@@ -185,6 +195,8 @@ class WhiskerApiClient:
     async def _authenticate(self) -> None:
         """Perform full authentication."""
         _LOGGER.debug("Performing full authentication")
+        if self._password is None:
+            raise WhiskerAuthError("Reauthentication required")
         try:
             result = await self._auth.authenticate(self._username, self._password)
 
@@ -192,8 +204,9 @@ class WhiskerApiClient:
             self._refresh_token = result["refresh_token"]
             self._id_token = result["id_token"]
 
-            # Token expires in 1 hour typically
-            self._token_expiry = datetime.now() + timedelta(hours=1)
+            self._token_expiry = datetime.now(UTC) + timedelta(
+                seconds=result["expires_in"]
+            )
 
             # Extract user info from attributes
             user_attrs = {
@@ -216,7 +229,9 @@ class WhiskerApiClient:
 
             self._access_token = result["AccessToken"]
             self._id_token = result.get("IdToken", self._id_token)
-            self._token_expiry = datetime.now() + timedelta(hours=1)
+            self._token_expiry = datetime.now(UTC) + timedelta(
+                seconds=result["ExpiresIn"]
+            )
 
             _LOGGER.debug("Access token refreshed")
 
@@ -259,9 +274,8 @@ class WhiskerApiClient:
                         return await retry_response.json()
 
                 if response.status != 200:
-                    text = await response.text()
                     raise WhiskerApiError(
-                        f"API request failed with status {response.status}: {text}"
+                        f"API request failed with status {response.status}"
                     )
 
                 return await response.json()
