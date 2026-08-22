@@ -11,6 +11,16 @@ from .const import DOMAIN
 from .coordinator import WhiskerDataUpdateCoordinator
 
 
+def site_device_info(site_id: int, site: Site | None) -> DeviceInfo:
+    """Return stable, address-safe registry information for a Ting site."""
+    return DeviceInfo(
+        identifiers={(DOMAIN, f"site_{site_id}")},
+        name=site.display_name if site and site.display_name else str(site_id),
+        manufacturer="Whisker Labs",
+        model="Ting Site",
+    )
+
+
 class WhiskerEntity(CoordinatorEntity[WhiskerDataUpdateCoordinator]):
     """Base class for entities backed by one Ting device."""
 
@@ -87,15 +97,7 @@ class WhiskerSiteEntity(CoordinatorEntity[WhiskerDataUpdateCoordinator]):
     @property
     def device_info(self) -> DeviceInfo:
         """Return stable, address-safe registry information for this Ting site."""
-        site = self.site_state
-        return DeviceInfo(
-            identifiers={(DOMAIN, f"site_{self._site_id}")},
-            name=site.display_name
-            if site and site.display_name
-            else str(self._site_id),
-            manufacturer="Whisker Labs",
-            model="Ting Site",
-        )
+        return site_device_info(self._site_id, self.site_state)
 
     @property
     def available(self) -> bool:

@@ -11,6 +11,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import WhiskerApiClient, WhiskerAuthError, WhiskerConnectionError
@@ -25,6 +26,7 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import WhiskerDataUpdateCoordinator
+from .entity import site_device_info
 from .history import async_register_history_service
 from .repairs import WhiskerRepairManager
 
@@ -102,6 +104,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Store the coordinator
     entry.runtime_data = coordinator
 
+    # Parent devices must exist before entity platforms register child devices.
+    _register_site_devices(hass, entry, coordinator)
+
     # Set up platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -109,6 +114,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(entry.add_update_listener(async_options_updated))
 
     return True
+
+
+def _register_site_devices(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    coordinator: WhiskerDataUpdateCoordinator,
+) -> None:
+    """Register parent Ting sites before child entity platforms are forwarded."""
+    registry = dr.async_get(hass)
+    for site_id, site in coordinator.sites.items():
+        info = site_device_info(site_id, site)
+        registry.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers=info["identifiers"],
+            name=info["name"],
+            manufacturer=info["manufacturer"],
+            model=info["model"],
+        )
 
 
 async def async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
