@@ -631,12 +631,12 @@ async def async_setup_entry(
             )
 
     for site_id in coordinator.sites:
-        for description in SITE_SENSOR_DESCRIPTIONS:
+        for site_description in SITE_SENSOR_DESCRIPTIONS:
             entities.append(
                 WhiskerSiteSensor(
                     coordinator=coordinator,
                     site_id=site_id,
-                    description=description,
+                    description=site_description,
                 )
             )
 

@@ -48,17 +48,21 @@ class WhiskerEntity(CoordinatorEntity[WhiskerDataUpdateCoordinator]):
         """Return stable registry information for this Ting device."""
         device_state = self.device_state
         if device_state is not None:
+            if device_state.site_id in self.coordinator.sites:
+                return DeviceInfo(
+                    identifiers={(DOMAIN, self._device_id)},
+                    name=device_state.name,
+                    manufacturer="Whisker Labs",
+                    model="Ting Fire Sensor",
+                    sw_version=device_state.version,
+                    via_device=(DOMAIN, f"site_{device_state.site_id}"),
+                )
             return DeviceInfo(
                 identifiers={(DOMAIN, self._device_id)},
                 name=device_state.name,
                 manufacturer="Whisker Labs",
                 model="Ting Fire Sensor",
                 sw_version=device_state.version,
-                via_device=(
-                    (DOMAIN, f"site_{device_state.site_id}")
-                    if device_state.site_id in self.coordinator.sites
-                    else None
-                ),
             )
         return DeviceInfo(
             identifiers={(DOMAIN, self._device_id)},

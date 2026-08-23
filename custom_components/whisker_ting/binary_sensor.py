@@ -220,8 +220,10 @@ async def async_setup_entry(
             )
 
     for site_id in coordinator.sites:
-        for description in SITE_BINARY_SENSOR_DESCRIPTIONS:
-            entities.append(WhiskerSiteBinarySensor(coordinator, site_id, description))
+        for site_description in SITE_BINARY_SENSOR_DESCRIPTIONS:
+            entities.append(
+                WhiskerSiteBinarySensor(coordinator, site_id, site_description)
+            )
 
     async_add_entities(entities)
 
