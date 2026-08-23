@@ -210,6 +210,54 @@ def test_optional_capability_tracks_only_explicit_authorization_failures() -> No
 
 
 @pytest.mark.parametrize(
+    ("failure", "reason"),
+    [
+        (api.WhiskerRateLimitError("limited"), "rate limited"),
+        (api.WhiskerServiceError("down"), "Ting service unavailable"),
+        (api.WhiskerConnectionError("offline"), "connection failed"),
+        (api.WhiskerInvalidResponseError("bad body"), "invalid response"),
+        (api.WhiskerApiError("other"), "API request failed"),
+    ],
+)
+def test_optional_capability_tracks_temporary_failure_reason(
+    failure: api.WhiskerApiError, reason: str
+) -> None:
+    """Temporary optional failures expose a stable non-sensitive reason."""
+
+    async def scenario() -> None:
+        client = _client(FakeSession())
+        client._request = AsyncMock(side_effect=failure)
+
+        assert (
+            await client._get_optional_data("/optional", capability="conditions")
+            is None
+        )
+        assert client.optional_capability_failures == {"conditions": reason}
+
+    asyncio.run(scenario())
+
+
+def test_optional_capability_recovery_clears_temporary_failure(caplog: Any) -> None:
+    """A successful optional response clears degradation without log spam."""
+
+    async def scenario() -> None:
+        client = _client(FakeSession())
+        client._request = AsyncMock(side_effect=api.WhiskerServiceError("secret"))
+
+        await client._get_optional_data("/optional", capability="conditions")
+        await client._get_optional_data("/optional", capability="conditions")
+        assert caplog.text.count("temporarily unavailable") == 1
+
+        client._request = AsyncMock(return_value={"ok": True})
+        assert await client._get_optional_data(
+            "/optional", capability="conditions"
+        ) == {"ok": True}
+        assert not client.optional_capability_failures
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
     "failure_factory",
     [api.WhiskerAuthError, api.WhiskerConnectionError],
 )

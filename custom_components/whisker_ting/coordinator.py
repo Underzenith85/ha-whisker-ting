@@ -347,7 +347,12 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
                 capabilities: frozenset[str] = getattr(
                     self.client, "unauthorized_capabilities", frozenset()
                 )
-                self.repair_manager.evaluate(data.values(), capabilities)
+                capability_failures = getattr(
+                    self.client, "optional_capability_failures", {}
+                )
+                self.repair_manager.evaluate(
+                    data.values(), capabilities, capability_failures
+                )
             return data
         except WhiskerAuthError as err:
             self._last_update_success = False

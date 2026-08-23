@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
@@ -51,6 +52,19 @@ from .parsers import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _optional_failure_reason(error: WhiskerApiError) -> str:
+    """Return a stable, non-sensitive reason for an optional endpoint failure."""
+    if isinstance(error, WhiskerRateLimitError):
+        return "rate limited"
+    if isinstance(error, WhiskerServiceError):
+        return "Ting service unavailable"
+    if isinstance(error, WhiskerConnectionError):
+        return "connection failed"
+    if isinstance(error, WhiskerInvalidResponseError):
+        return "invalid response"
+    return "API request failed"
+
+
 class WhiskerApiClient:
     """Client for the Whisker Ting API."""
 
@@ -80,6 +94,7 @@ class WhiskerApiClient:
         self._lock = asyncio.Lock()
         self._sites: dict[int, Site] = {}
         self._unauthorized_capabilities: set[str] = set()
+        self._optional_capability_failures: dict[str, str] = {}
 
     @property
     def user_id(self) -> int | None:
@@ -105,6 +120,11 @@ class WhiskerApiClient:
     def unauthorized_capabilities(self) -> frozenset[str]:
         """Return optional capabilities rejected with explicit authorization errors."""
         return frozenset(self._unauthorized_capabilities)
+
+    @property
+    def optional_capability_failures(self) -> Mapping[str, str]:
+        """Return temporary failures affecting optional capabilities."""
+        return dict(self._optional_capability_failures)
 
     async def _ensure_token(self) -> str:
         """Ensure we have a valid access token."""
@@ -337,21 +357,35 @@ class WhiskerApiClient:
             result = await self._request("GET", endpoint, **kwargs)
             if capability:
                 self._unauthorized_capabilities.discard(capability)
+                if self._optional_capability_failures.pop(capability, None):
+                    _LOGGER.info("Optional Ting capability %s recovered", capability)
             return result
         except WhiskerAuthError:
             raise
         except WhiskerAuthorizationError as err:
             if capability:
                 self._unauthorized_capabilities.add(capability)
+                self._optional_capability_failures.pop(capability, None)
             _LOGGER.debug("Optional Ting capability is not authorized: %s", err)
             return None
         except WhiskerNotFoundError as err:
             if capability:
                 self._unauthorized_capabilities.discard(capability)
+                self._optional_capability_failures.pop(capability, None)
             _LOGGER.debug("Optional Ting capability is unsupported: %s", err)
             return None
         except WhiskerApiError as err:
-            _LOGGER.debug("Optional Ting feature endpoint unavailable: %s", err)
+            reason = _optional_failure_reason(err)
+            if capability:
+                if self._optional_capability_failures.get(capability) != reason:
+                    _LOGGER.warning(
+                        "Optional Ting capability %s is temporarily unavailable (%s)",
+                        capability,
+                        reason,
+                    )
+                self._optional_capability_failures[capability] = reason
+            else:
+                _LOGGER.debug("Optional Ting feature endpoint unavailable: %s", reason)
             return None
 
     async def get_all_device_states(self) -> dict[str, DeviceState]:
