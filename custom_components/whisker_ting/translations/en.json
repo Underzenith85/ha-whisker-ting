@@ -61,6 +61,10 @@
     "optional_capability_unauthorized": {
       "title": "Ting optional capability is no longer authorized",
       "description": "Ting explicitly denied access to {capability} for {entry_title}. Other integration features continue to work. Unsupported endpoints and temporary service failures do not create this repair. The issue clears automatically if access succeeds later."
+    },
+    "optional_capability_unavailable": {
+      "title": "Ting optional capability is temporarily unavailable",
+      "description": "The {capability} capability for {entry_title} has failed across several updates because the {reason}. Other integration features continue to work. This issue clears automatically when the capability recovers."
     }
   },
   "services": {

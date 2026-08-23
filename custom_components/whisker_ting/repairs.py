@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
@@ -54,6 +54,7 @@ class WhiskerRepairManager:
         self,
         devices: Iterable[DeviceState],
         unauthorized_capabilities: Iterable[str],
+        optional_capability_failures: Mapping[str, str] | None = None,
     ) -> None:
         """Evaluate one successful REST update and reconcile Repairs."""
         active_ids: set[str] = set()
@@ -105,6 +106,23 @@ class WhiskerRepairManager:
                 translation_placeholders={
                     "capability": CAPABILITY_NAMES[capability],
                     "entry_title": self._entry_title,
+                },
+            )
+
+        for capability, reason in (optional_capability_failures or {}).items():
+            if capability not in CAPABILITY_NAMES:
+                continue
+            issue_id = self._issue_id(f"capability_failure_{capability}")
+            active_ids.add(issue_id)
+            self._set_sustained_issue(
+                issue_id,
+                True,
+                "optional_capability_unavailable",
+                ir.IssueSeverity.WARNING,
+                {
+                    "capability": CAPABILITY_NAMES[capability],
+                    "entry_title": self._entry_title,
+                    "reason": reason,
                 },
             )
 

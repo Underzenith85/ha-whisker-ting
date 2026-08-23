@@ -111,6 +111,30 @@ def test_authentication_and_optional_capability_repairs_clear(
     assert not _issues(hass, "optional_capability_unauthorized")
 
 
+def test_temporary_optional_capability_repair_is_sustained_and_clears(
+    hass: HomeAssistant,
+) -> None:
+    """Temporary optional failures create a bounded Repair only when sustained."""
+    manager = WhiskerRepairManager(hass, "entry-5", "Home account")
+    failures = {"conditions": "Ting service unavailable"}
+
+    for _ in range(SUSTAINED_UPDATE_THRESHOLD - 1):
+        manager.evaluate([], [], failures)
+    assert not _issues(hass, "optional_capability_unavailable")
+
+    manager.evaluate([], [], failures)
+    issue = _issues(hass, "optional_capability_unavailable")
+    assert len(issue) == 1
+    assert issue[0].translation_placeholders == {
+        "capability": "current conditions",
+        "entry_title": "Home account",
+        "reason": "Ting service unavailable",
+    }
+
+    manager.evaluate([], [], {})
+    assert not _issues(hass, "optional_capability_unavailable")
+
+
 async def test_removing_entry_clears_all_owned_repairs(hass: HomeAssistant) -> None:
     """Deleting a config entry removes its persistent Repair records."""
     manager = WhiskerRepairManager(hass, "entry-4", "Home")
