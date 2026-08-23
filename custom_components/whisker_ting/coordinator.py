@@ -248,9 +248,11 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
 
             events = await self.client.get_event_history()
             for event in events:
-                device = data.get(event.serial_number) if event.serial_number else None
-                if device is not None:
-                    device.events.append(event)
+                event_device = (
+                    data.get(event.serial_number) if event.serial_number else None
+                )
+                if event_device is not None:
+                    event_device.events.append(event)
                 elif event.site_id is not None and (
                     site := self.sites.get(event.site_id)
                 ):
@@ -266,7 +268,7 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
             for device, result in zip(data.values(), frozen_pipe_results, strict=True):
                 if isinstance(result, WhiskerAuthError):
                     raise result
-                if isinstance(result, Exception):
+                if isinstance(result, BaseException):
                     _LOGGER.debug(
                         "Detailed frozen-pipe data unavailable for device %s: %s",
                         device.serial_number,
@@ -342,7 +344,7 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
 
             if self.repair_manager:
                 self.repair_manager.clear_authentication_issue()
-                capabilities = getattr(
+                capabilities: frozenset[str] = getattr(
                     self.client, "unauthorized_capabilities", frozenset()
                 )
                 self.repair_manager.evaluate(data.values(), capabilities)

@@ -73,6 +73,20 @@ EVENT_CONDITION_DESCRIPTIONS: tuple[
 )
 
 
+def _device_event_condition_value(
+    key: str, on: frozenset[str], off: frozenset[str]
+) -> Callable[[DeviceState], bool | None]:
+    """Build a typed device event-condition accessor."""
+    return lambda state: _device_event_condition(state, key, on, off)
+
+
+def _site_event_condition_value(
+    on: frozenset[str], off: frozenset[str]
+) -> Callable[[Site], bool | None]:
+    """Build a typed site event-condition accessor."""
+    return lambda site: _event_condition(site.events, on, off)
+
+
 BINARY_SENSOR_DESCRIPTIONS: tuple[WhiskerBinarySensorEntityDescription, ...] = (
     # Primary hazard sensors (enabled by default)
     WhiskerBinarySensorEntityDescription(
@@ -134,9 +148,7 @@ BINARY_SENSOR_DESCRIPTIONS: tuple[WhiskerBinarySensorEntityDescription, ...] = (
             key=key,
             translation_key=key,
             device_class=device_class,
-            value_fn=lambda state, key=key, on=on, off=off: _device_event_condition(
-                state, key, on, off
-            ),
+            value_fn=_device_event_condition_value(key, on, off),
         )
         for key, device_class, on, off in EVENT_CONDITION_DESCRIPTIONS
     ),
@@ -150,7 +162,7 @@ SITE_BINARY_SENSOR_DESCRIPTIONS: tuple[
         key=key,
         translation_key=key,
         device_class=device_class,
-        value_fn=lambda site, on=on, off=off: _event_condition(site.events, on, off),
+        value_fn=_site_event_condition_value(on, off),
     )
     for key, device_class, on, off in EVENT_CONDITION_DESCRIPTIONS
 )
