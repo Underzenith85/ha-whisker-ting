@@ -236,123 +236,11 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
     async def _async_update_data(self) -> dict[str, DeviceState]:
         """Fetch data from the API."""
         try:
-            data = await self.client.get_all_device_states()
-            observed_at = datetime.now(UTC)
-            for device in data.values():
-                device.rest_health = "healthy"
-                device.last_rest_update_utc = observed_at
-                if device.last_device_observation_utc is None:
-                    device.last_device_observation_utc = observed_at
-            client_sites = getattr(self.client, "sites", None)
-            self.sites = dict(client_sites) if isinstance(client_sites, dict) else {}
-
-            events = await self.client.get_event_history()
-            for event in events:
-                event_device = (
-                    data.get(event.serial_number) if event.serial_number else None
-                )
-                if event_device is not None:
-                    event_device.events.append(event)
-                elif event.site_id is not None and (
-                    site := self.sites.get(event.site_id)
-                ):
-                    site.events.append(event)
-
-            frozen_pipe_results = await asyncio.gather(
-                *(
-                    self.client.get_frozen_pipe_data(device.serial_number)
-                    for device in data.values()
-                ),
-                return_exceptions=True,
-            )
-            for device, result in zip(data.values(), frozen_pipe_results, strict=True):
-                if isinstance(result, WhiskerAuthError):
-                    raise result
-                if isinstance(result, BaseException):
-                    _LOGGER.debug(
-                        "Detailed frozen-pipe data unavailable for device %s: %s",
-                        device.serial_number,
-                        result,
-                    )
-                    continue
-                device.frozen_pipe = result
-
-            # Preserve existing voltage data from WebSocket
-            if self.data:
-                for device_id, device_state in data.items():
-                    existing = self.data.get(device_id)
-                    if existing and existing.voltage.has_live_data:
-                        device_state.voltage = existing.voltage
-                    if existing:
-                        device_state.last_realtime_sample_utc = (
-                            existing.last_realtime_sample_utc
-                        )
-                        device_state.stream_reconnect_count = (
-                            existing.stream_reconnect_count
-                        )
-                        device_state.last_stream_reconnect_utc = (
-                            existing.last_stream_reconnect_utc
-                        )
-                        device_state.last_stream_reconnect_reason = (
-                            existing.last_stream_reconnect_reason
-                        )
-
-            if self._last_update_success is False:
-                _LOGGER.info("Connection to Whisker Ting API restored")
-            self._last_update_success = True
-
-            await self._connect_websocket(data)
-            if self._ws_manager:
-                wait_tasks = [
-                    self._ws_manager.wait_for_data(device_state.station_id, timeout=5.0)
-                    for device_state in data.values()
-                    if device_state.station_id
-                    and self._ws_manager.is_station_managed(device_state.station_id)
-                ]
-                if wait_tasks:
-                    await asyncio.gather(*wait_tasks)
-                for device_state in data.values():
-                    if device_state.station_id:
-                        diagnostics = self._ws_manager.get_station_diagnostics(
-                            device_state.station_id
-                        )
-                        device_state.last_realtime_sample_utc = (
-                            diagnostics.last_sample_utc
-                        )
-                        device_state.stream_reconnect_count = (
-                            diagnostics.reconnect_count
-                        )
-                        device_state.last_stream_reconnect_utc = (
-                            diagnostics.last_reconnect_utc
-                        )
-                        device_state.last_stream_reconnect_reason = (
-                            diagnostics.last_reconnect_reason
-                        )
-                        device_state.stream_health = self._ws_manager.get_station_state(
-                            device_state.station_id
-                        ).health.value
-                        voltage_data = self._ws_manager.get_voltage_data(
-                            device_state.station_id
-                        )
-                        if voltage_data:
-                            device_state.voltage = device_state.voltage.with_voltage(
-                                voltage=voltage_data.voltage,
-                                voltage_hi=voltage_data.voltage_hi,
-                                voltage_lo=voltage_data.voltage_lo,
-                                average_peaks_max=voltage_data.average_peaks_max,
-                            )
-
-            if self.repair_manager:
-                self.repair_manager.clear_authentication_issue()
-                capabilities: frozenset[str] = getattr(
-                    self.client, "unauthorized_capabilities", frozenset()
-                )
-                capability_failures = getattr(
-                    self.client, "optional_capability_failures", {}
-                )
-                self.repair_manager.evaluate(
-                    data.values(), capabilities, capability_failures
-                )
+            data = await self._async_collect_rest_data()
+            self._merge_retained_state(data)
+            self._mark_update_successful()
+            await self._async_sync_stream_state(data)
+            self._evaluate_repairs(data)
             return data
         except WhiskerAuthError as err:
             self._last_update_success = False
@@ -370,6 +258,132 @@ class WhiskerDataUpdateCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]
             raise UpdateFailed(
                 f"Error communicating with Whisker Ting API: {err}"
             ) from err
+
+    async def _async_collect_rest_data(self) -> dict[str, DeviceState]:
+        """Collect and enrich one independently validated REST snapshot."""
+        data = await self.client.get_all_device_states()
+        self._mark_snapshot_healthy(data)
+        client_sites = getattr(self.client, "sites", None)
+        self.sites = dict(client_sites) if isinstance(client_sites, dict) else {}
+        await self._async_assign_events(data)
+        await self._async_enrich_frozen_pipe(data)
+        return data
+
+    @staticmethod
+    def _mark_snapshot_healthy(data: dict[str, DeviceState]) -> None:
+        """Record successful REST observation metadata on a new snapshot."""
+        observed_at = datetime.now(UTC)
+        for device in data.values():
+            device.rest_health = "healthy"
+            device.last_rest_update_utc = observed_at
+            if device.last_device_observation_utc is None:
+                device.last_device_observation_utc = observed_at
+
+    async def _async_assign_events(self, data: dict[str, DeviceState]) -> None:
+        """Attach account events to their device or site owner."""
+        for event in await self.client.get_event_history():
+            event_device = (
+                data.get(event.serial_number) if event.serial_number else None
+            )
+            if event_device is not None:
+                event_device.events.append(event)
+            elif event.site_id is not None and (site := self.sites.get(event.site_id)):
+                site.events.append(event)
+
+    async def _async_enrich_frozen_pipe(self, data: dict[str, DeviceState]) -> None:
+        """Enrich devices concurrently without hiding auth or cancellation."""
+        results = await asyncio.gather(
+            *(
+                self.client.get_frozen_pipe_data(device.serial_number)
+                for device in data.values()
+            ),
+            return_exceptions=True,
+        )
+        for device, result in zip(data.values(), results, strict=True):
+            if isinstance(result, (WhiskerAuthError, asyncio.CancelledError)):
+                raise result
+            if isinstance(result, Exception):
+                _LOGGER.debug(
+                    "Detailed frozen-pipe data unavailable for device %s: %s",
+                    device.serial_number,
+                    result,
+                )
+                continue
+            if isinstance(result, BaseException):
+                raise result
+            device.frozen_pipe = result
+
+    def _merge_retained_state(self, data: dict[str, DeviceState]) -> None:
+        """Merge live state that remains valid across REST snapshots."""
+        if not self.data:
+            return
+        for device_id, device_state in data.items():
+            existing = self.data.get(device_id)
+            if existing is None:
+                continue
+            if existing.voltage.has_live_data:
+                device_state.voltage = existing.voltage
+            device_state.last_realtime_sample_utc = existing.last_realtime_sample_utc
+            device_state.stream_reconnect_count = existing.stream_reconnect_count
+            device_state.last_stream_reconnect_utc = existing.last_stream_reconnect_utc
+            device_state.last_stream_reconnect_reason = (
+                existing.last_stream_reconnect_reason
+            )
+
+    def _mark_update_successful(self) -> None:
+        """Record recovery after the REST snapshot and enrichment succeed."""
+        if self._last_update_success is False:
+            _LOGGER.info("Connection to Whisker Ting API restored")
+        self._last_update_success = True
+
+    async def _async_sync_stream_state(self, data: dict[str, DeviceState]) -> None:
+        """Connect streams, await initial samples, and copy live state."""
+        await self._connect_websocket(data)
+        if self._ws_manager is None:
+            return
+        wait_tasks = [
+            self._ws_manager.wait_for_data(device.station_id, timeout=5.0)
+            for device in data.values()
+            if device.station_id
+            and self._ws_manager.is_station_managed(device.station_id)
+        ]
+        if wait_tasks:
+            await asyncio.gather(*wait_tasks)
+        for device in data.values():
+            if device.station_id:
+                self._apply_stream_state(device, device.station_id)
+
+    def _apply_stream_state(self, device: DeviceState, station_id: str) -> None:
+        """Copy one manager-owned stream snapshot onto a device."""
+        if self._ws_manager is None:
+            return
+        diagnostics = self._ws_manager.get_station_diagnostics(station_id)
+        device.last_realtime_sample_utc = diagnostics.last_sample_utc
+        device.stream_reconnect_count = diagnostics.reconnect_count
+        device.last_stream_reconnect_utc = diagnostics.last_reconnect_utc
+        device.last_stream_reconnect_reason = diagnostics.last_reconnect_reason
+        device.stream_health = self._ws_manager.get_station_state(
+            station_id
+        ).health.value
+        voltage_data = self._ws_manager.get_voltage_data(station_id)
+        if voltage_data:
+            device.voltage = device.voltage.with_voltage(
+                voltage=voltage_data.voltage,
+                voltage_hi=voltage_data.voltage_hi,
+                voltage_lo=voltage_data.voltage_lo,
+                average_peaks_max=voltage_data.average_peaks_max,
+            )
+
+    def _evaluate_repairs(self, data: dict[str, DeviceState]) -> None:
+        """Reconcile entry-scoped Repairs after a successful update."""
+        if self.repair_manager is None:
+            return
+        self.repair_manager.clear_authentication_issue()
+        capabilities: frozenset[str] = getattr(
+            self.client, "unauthorized_capabilities", frozenset()
+        )
+        capability_failures = getattr(self.client, "optional_capability_failures", {})
+        self.repair_manager.evaluate(data.values(), capabilities, capability_failures)
 
     def _mark_rest_unhealthy(self) -> None:
         """Retain last known device data while marking REST independently failed."""

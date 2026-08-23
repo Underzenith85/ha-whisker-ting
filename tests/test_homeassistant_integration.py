@@ -803,6 +803,40 @@ async def test_coordinator_auth_failure_and_successful_repair_evaluation(
 
 
 @pytest.mark.asyncio
+async def test_frozen_pipe_enrichment_isolates_optional_device_failure(
+    hass: HomeAssistant,
+) -> None:
+    """One optional enrichment failure does not discard another device's data."""
+    detail = FrozenPipeData()
+    client = MagicMock()
+    client.get_frozen_pipe_data = AsyncMock(
+        side_effect=[detail, WhiskerApiError("optional failure")]
+    )
+    coordinator = WhiskerDataUpdateCoordinator(hass, client, MagicMock())
+    first = DeviceState("FIRST", "First", "Type", 1)
+    second = DeviceState("SECOND", "Second", "Type", 1)
+
+    await coordinator._async_enrich_frozen_pipe({"FIRST": first, "SECOND": second})
+
+    assert first.frozen_pipe is detail
+    assert second.frozen_pipe == FrozenPipeData()
+
+
+@pytest.mark.asyncio
+async def test_frozen_pipe_enrichment_propagates_cancellation(
+    hass: HomeAssistant,
+) -> None:
+    """Coordinator cancellation cannot be downgraded to optional data loss."""
+    client = MagicMock()
+    client.get_frozen_pipe_data = AsyncMock(side_effect=asyncio.CancelledError)
+    coordinator = WhiskerDataUpdateCoordinator(hass, client, MagicMock())
+    device = DeviceState("SERIAL", "Device", "Type", 1)
+
+    with pytest.raises(asyncio.CancelledError):
+        await coordinator._async_enrich_frozen_pipe({"SERIAL": device})
+
+
+@pytest.mark.asyncio
 async def test_setup_entry_connection_failures_and_migration_options(
     hass: HomeAssistant,
 ) -> None:
