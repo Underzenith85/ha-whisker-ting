@@ -34,7 +34,7 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-class WhiskerConfigFlowHandler(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
+class WhiskerConfigFlowHandler(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Whisker Ting."""
 
     VERSION = 2
