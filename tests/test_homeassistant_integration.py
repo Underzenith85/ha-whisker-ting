@@ -11,6 +11,7 @@ import pytest
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import UpdateFailed
@@ -28,6 +29,8 @@ from custom_components.whisker_ting.api import (
     TingEvent,
     UserData,
     WhiskerApiError,
+    WhiskerAuthError,
+    WhiskerConnectionError,
 )
 from custom_components.whisker_ting.binary_sensor import (
     BINARY_SENSOR_DESCRIPTIONS,
@@ -40,6 +43,7 @@ from custom_components.whisker_ting.const import (
     CONF_API_KEY,
     CONF_PASSWORD,
     CONF_REFRESH_TOKEN,
+    CONF_SCAN_INTERVAL,
     CONF_USER_ID,
     CONF_USERNAME,
     DOMAIN,
@@ -62,6 +66,7 @@ from custom_components.whisker_ting.stream import (
     PowerQualityCategory,
     PowerQualityData,
     StationDiagnostics,
+    StreamHealth,
     VoltageData,
 )
 
@@ -690,3 +695,153 @@ async def test_interleaved_live_metrics_survive_rest_refresh(
     assert reading.voltage == 120
     assert reading.frequency_hz == 60.01
     assert reading.thd_avg_percent == 2.4
+
+
+@pytest.mark.asyncio
+async def test_coordinator_handlers_cover_absent_data_and_all_quality_metrics(
+    hass: HomeAssistant,
+) -> None:
+    """Callbacks safely ignore absent data and apply every quality category."""
+    coordinator = WhiskerDataUpdateCoordinator(hass, MagicMock(), MagicMock())
+    voltage = VoltageData(datetime.now(UTC), 120, 121, 119, 4)
+    coordinator._schedule_stream_listener_update()
+    coordinator._flush_stream_listener_update()
+    coordinator._handle_voltage_update("station", voltage)
+    coordinator._handle_power_quality_update(
+        "station",
+        PowerQualityData(datetime.now(UTC), PowerQualityCategory.THD_MIN, 1),
+    )
+    assert not coordinator.is_realtime_available("missing")
+
+    device = DeviceState("SERIAL", "Device", "Type", 1, station_id="station")
+    coordinator.data = {device.serial_number: device}
+    coordinator.async_set_updated_data = MagicMock()
+    coordinator._handle_availability_update("station", True)
+    coordinator._handle_stream_health_update("station", StreamHealth.RECEIVING)
+    coordinator._handle_stream_diagnostics_update(
+        "station",
+        StationDiagnostics(
+            last_sample_utc=datetime.now(UTC),
+            reconnect_count=2,
+            last_reconnect_reason="synthetic",
+        ),
+    )
+    for category, value in (
+        (PowerQualityCategory.THD_MIN, 1),
+        (PowerQualityCategory.THD_AVERAGE, 2),
+        (PowerQualityCategory.THD_MAX, 3),
+    ):
+        coordinator._handle_power_quality_update(
+            "station", PowerQualityData(datetime.now(UTC), category, value)
+        )
+    assert device.voltage.thd_min_percent == 1
+    assert device.voltage.thd_max_percent == 3
+    await coordinator.async_shutdown()
+
+
+@pytest.mark.asyncio
+async def test_coordinator_websocket_skip_empty_credentials_and_connection_error(
+    hass: HomeAssistant,
+) -> None:
+    """Stream setup handles empty data, absent credentials, and client failure."""
+    client = MagicMock(api_key=None, user_id=None)
+    manager = MagicMock(
+        is_station_managed=MagicMock(return_value=False),
+        connect_device=AsyncMock(side_effect=RuntimeError("synthetic")),
+        disconnect_all=AsyncMock(),
+    )
+    with patch(
+        "custom_components.whisker_ting.coordinator.WhiskerWebSocketManager",
+        return_value=manager,
+    ):
+        coordinator = WhiskerDataUpdateCoordinator(hass, client, MagicMock())
+        await coordinator._connect_websocket({})
+        await coordinator._connect_websocket(
+            {"SERIAL": DeviceState("SERIAL", "Device", "Type", 1, station_id="s")}
+        )
+        client.api_key = "key"
+        client.user_id = 42
+        await coordinator._connect_websocket(
+            {"SERIAL": DeviceState("SERIAL", "Device", "Type", 1, station_id="s")}
+        )
+        await coordinator.async_shutdown()
+    manager.connect_device.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_coordinator_auth_failure_and_successful_repair_evaluation(
+    hass: HomeAssistant,
+) -> None:
+    """Account auth failures create Repairs and successful refreshes clear them."""
+    repair = MagicMock()
+    client = MagicMock(
+        api_key=None,
+        user_id=None,
+        sites={},
+        unauthorized_capabilities={"conditions"},
+    )
+    client.get_all_device_states = AsyncMock(side_effect=WhiskerAuthError("expired"))
+    coordinator = WhiskerDataUpdateCoordinator(
+        hass, client, MagicMock(), repair_manager=repair
+    )
+    coordinator.data = {"OLD": DeviceState("OLD", "Old", "Type", 1)}
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+    assert coordinator.data["OLD"].rest_health == "error"
+    repair.create_authentication_issue.assert_called_once()
+
+    device = DeviceState("SERIAL", "Device", "Type", 1)
+    client.get_all_device_states = AsyncMock(return_value={"SERIAL": device})
+    client.get_event_history = AsyncMock(return_value=[])
+    client.get_frozen_pipe_data = AsyncMock(return_value=FrozenPipeData())
+    coordinator.data = None
+    result = await coordinator._async_update_data()
+    assert result == {"SERIAL": device}
+    repair.clear_authentication_issue.assert_called_once()
+    repair.evaluate.assert_called_once()
+    await coordinator.async_shutdown()
+
+
+@pytest.mark.asyncio
+async def test_setup_entry_connection_failures_and_migration_options(
+    hass: HomeAssistant,
+) -> None:
+    """Entry setup classifies probe failures and migration/options update state."""
+    from custom_components.whisker_ting import (
+        async_migrate_entry,
+        async_options_updated,
+    )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=1,
+        data={CONF_USERNAME: "user", CONF_REFRESH_TOKEN: "refresh"},
+        options={CONF_SCAN_INTERVAL: 300},
+    )
+    entry.add_to_hass(hass)
+    assert await async_migrate_entry(hass, entry)
+    assert entry.version == 2
+
+    coordinator = MagicMock()
+    entry.runtime_data = coordinator
+    await async_options_updated(hass, entry)
+    assert coordinator.update_interval.total_seconds() == 300
+
+    for failure, expected in (
+        (False, ConfigEntryNotReady),
+        (WhiskerAuthError("bad"), ConfigEntryAuthFailed),
+        (WhiskerConnectionError("offline"), ConfigEntryNotReady),
+    ):
+        client = MagicMock(
+            test_connection=AsyncMock(
+                side_effect=failure if isinstance(failure, Exception) else None,
+                return_value=failure if isinstance(failure, bool) else None,
+            )
+        )
+        with (
+            patch(
+                "custom_components.whisker_ting.WhiskerApiClient", return_value=client
+            ),
+            pytest.raises(expected),
+        ):
+            await async_setup_entry(hass, entry)

@@ -179,6 +179,27 @@ def test_non_finite_coordinates_are_discarded() -> None:
     assert result.sites[0].longitude is None
 
 
+def test_scalar_and_conditions_helpers_reject_malformed_boundaries() -> None:
+    """Scalar maps, identifiers, conditions, and devices reject malformed shapes."""
+    assert parsers.optional_identifier_string(42) == "42"
+    assert parsers.bounded_scalar_mapping(None) is None
+    assert parsers.bounded_scalar_mapping({True: 1, "flag": True}) == {"flag": True}
+    assert parsers.parse_event_history({}) == []
+    with pytest.raises(ValueError, match="serial number"):
+        parsers.parse_device({})
+    assert parsers.parse_conditions([]) is None
+    conditions = parsers.parse_conditions(
+        {
+            "currentTemperatures": {"bad": 20},
+            "currentOutageRisks": {"bad": "high"},
+            "devices": [None, {}, {"serialNumber": "SERIAL", "fireHazardStatus": {}}],
+        }
+    )
+    assert conditions is not None
+    assert conditions.temperatures == {}
+    assert len(conditions.devices) == 1
+
+
 def test_parses_frozen_pipe_status_and_history_without_raw_data() -> None:
     """Known frozen-pipe fields parse while unknown fields are discarded."""
     status = parsers.parse_frozen_pipe_record(

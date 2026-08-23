@@ -8,6 +8,10 @@ venv/
 .venv/
 env/
 
+# Test coverage
+.coverage
+coverage.json
+
 # IDE
 .idea/
 .vscode/

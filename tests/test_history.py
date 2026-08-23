@@ -115,6 +115,8 @@ def test_history_window_is_timezone_aware_ordered_and_bounded() -> None:
         _validate_window(
             datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 3, 1, tzinfo=UTC)
         )
+    with pytest.raises(ValueError, match="positive"):
+        aggregate_voltage_history([], timedelta(0))
 
 
 @pytest.mark.asyncio
@@ -191,3 +193,59 @@ async def test_service_imports_once_and_empty_history_writes_nothing(
         )
         assert response["hourly_statistics"] == 0
         add_statistics.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_missing_entry_device_and_api_failure(
+    hass: HomeAssistant,
+) -> None:
+    """History action failures are explicit and never write partial statistics."""
+    async_register_history_service(hass)
+    start = datetime(2026, 8, 1, tzinfo=UTC)
+    data = {
+        "config_entry_id": "entry-id",
+        "serial_number": "SERIAL-001",
+        "start": start,
+        "end": start + timedelta(hours=1),
+    }
+    with (
+        patch.object(hass.config_entries, "async_get_entry", return_value=None),
+        pytest.raises(HomeAssistantError, match="Loaded"),
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_IMPORT_VOLTAGE_HISTORY,
+            data,
+            blocking=True,
+            return_response=True,
+        )
+
+    client = MagicMock(get_voltage_history=AsyncMock())
+    entry = MagicMock(domain=DOMAIN, runtime_data=MagicMock(client=client, data={}))
+    with (
+        patch.object(hass.config_entries, "async_get_entry", return_value=entry),
+        pytest.raises(HomeAssistantError, match="not in this entry"),
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_IMPORT_VOLTAGE_HISTORY,
+            data,
+            blocking=True,
+            return_response=True,
+        )
+
+    entry.runtime_data.data = {
+        "SERIAL-001": DeviceState("SERIAL-001", "Test", "FireSensor", 1)
+    }
+    client.get_voltage_history.side_effect = WhiskerRateLimitError("limited")
+    with (
+        patch.object(hass.config_entries, "async_get_entry", return_value=entry),
+        pytest.raises(HomeAssistantError, match="history import failed"),
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_IMPORT_VOLTAGE_HISTORY,
+            data,
+            blocking=True,
+            return_response=True,
+        )

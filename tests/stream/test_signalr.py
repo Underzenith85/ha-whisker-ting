@@ -282,6 +282,27 @@ def test_decode_handshake_rejects_server_error_without_exposing_it() -> None:
     assert secret not in str(raised.value)
 
 
+def test_additional_protocol_shape_failures() -> None:
+    """Handshake and invocation helpers reject remaining malformed shapes."""
+    with pytest.raises(signalr.SignalRHandshakeError, match="invalid type"):
+        signalr.decode_handshake_response(object())
+    with pytest.raises(signalr.SignalRHandshakeError, match="UTF-8"):
+        signalr.decode_handshake_response(b"\xff\x1e")
+    with pytest.raises(signalr.SignalRProtocolError, match="cannot be empty"):
+        signalr.decode_hub_messages(b"\x00")
+    short = signalr.encode_hub_message([1])
+    with pytest.raises(signalr.SignalRProtocolError, match="too short"):
+        signalr.extract_invocation_payloads(short, "target")
+    no_arguments = signalr.encode_hub_message([1, {}, None, "target", []])
+    with pytest.raises(signalr.SignalRProtocolError, match="no arguments"):
+        signalr.extract_invocation_payloads(no_arguments, "target")
+    categorical = signalr.encode_hub_message(
+        [1, {}, None, "updateGraphMultiCategorical", [["invalid"]]]
+    )
+    with pytest.raises(signalr.SignalRProtocolError, match="must be an object"):
+        signalr.extract_categorical_payloads(categorical)
+
+
 def test_extract_ping_structurally() -> None:
     """Ping recognition uses the decoded hub type, not raw byte equality."""
     ping = signalr.encode_hub_message([signalr.MSG_TYPE_PING])

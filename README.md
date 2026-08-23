@@ -303,6 +303,7 @@ checks with:
 ```bash
 uv sync --locked
 uv run --no-sync pytest
+uv run --no-sync python scripts/check_coverage.py coverage.json
 uv run --no-sync ruff check custom_components tests
 uv run --no-sync mypy custom_components/whisker_ting/api/models.py custom_components/whisker_ting/auth/models.py custom_components/whisker_ting/auth/srp.py custom_components/whisker_ting/stream/models.py custom_components/whisker_ting/stream/signalr.py
 uv run --no-sync python -m compileall -q custom_components tests

@@ -6,12 +6,13 @@ import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
 import pytest
 
 from custom_components.whisker_ting import api
+from custom_components.whisker_ting.auth import AuthenticationError
 
 
 class FakeResponse:
@@ -224,3 +225,97 @@ def test_connection_probe_preserves_actionable_failures(
             await client.test_connection()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.asyncio
+async def test_client_properties_authentication_and_refresh_failures() -> None:
+    """Credential properties and authentication failures are fully bounded."""
+    client = api.WhiskerApiClient(
+        MagicMock(), "user", refresh_token="refresh", user_id=42, api_key="key"
+    )
+    assert client.user_id == 42
+    assert client.api_key == "key"
+    assert client.refresh_token == "refresh"
+    assert client.sites == {}
+
+    client._password = None
+    with pytest.raises(api.WhiskerAuthError, match="Reauthentication"):
+        await client._authenticate()
+
+    client._password = "password"
+    client._auth.authenticate = AsyncMock(side_effect=AuthenticationError("bad"))
+    with pytest.raises(api.WhiskerAuthError, match="bad"):
+        await client._authenticate()
+
+    client._auth.refresh_tokens = AsyncMock(side_effect=AuthenticationError("old"))
+    with pytest.raises(api.WhiskerAuthError, match="old"):
+        await client._refresh_access_token()
+
+
+@pytest.mark.asyncio
+async def test_token_renewal_covers_concurrent_and_full_auth_paths() -> None:
+    """A concurrent token, refresh fallback, and absent result are handled."""
+    client = api.WhiskerApiClient(MagicMock(), "user", "password")
+    client._access_token = "newer"
+    assert await client._renew_after_unauthorized("rejected") == "newer"
+
+    client._access_token = "rejected"
+    client._refresh_token = "refresh"
+    client._refresh_access_token = AsyncMock(side_effect=api.WhiskerAuthError("old"))
+
+    async def authenticate() -> None:
+        client._access_token = "full-auth"
+
+    client._authenticate = AsyncMock(side_effect=authenticate)
+    assert await client._renew_after_unauthorized("rejected") == "full-auth"
+
+    client._refresh_token = None
+    client._access_token = None
+    client._authenticate = AsyncMock()
+    with pytest.raises(api.WhiskerAuthError, match="Authentication failed"):
+        await client._renew_after_unauthorized("rejected")
+
+
+@pytest.mark.asyncio
+async def test_optional_success_and_getters_authenticate_when_identity_missing() -> (
+    None
+):
+    """Optional capability recovery and identity-dependent getters renew first."""
+    client = api.WhiskerApiClient(MagicMock(), "user")
+    client._unauthorized_capabilities.add("conditions")
+    client._request = AsyncMock(return_value={})
+    assert await client._get_optional_data("/optional", capability="conditions") == {}
+    assert not client.unauthorized_capabilities
+
+    client._user_id = None
+
+    async def ensure() -> str:
+        client._user_id = 42
+        return "token"
+
+    client._ensure_token = AsyncMock(side_effect=ensure)
+    client._request = AsyncMock(return_value={"id": 42})
+    assert (await client.get_user_data()).user_id == 42
+
+    client._user_id = None
+    client._get_optional_data = AsyncMock(return_value={})
+    await client.get_user_conditions()
+    client._ensure_token.assert_awaited()
+
+    client._user_id = None
+    client._get_optional_data = AsyncMock(return_value=[])
+    assert await client.get_event_history() == []
+
+
+@pytest.mark.asyncio
+async def test_all_device_states_without_conditions_and_probe_false() -> None:
+    """Missing optional conditions retain devices and generic API errors probe false."""
+    device = api.DeviceState("SERIAL", "Device", "Type", 1)
+    user = api.UserData(42, "", "", "", devices=[device], sites=[])
+    client = api.WhiskerApiClient(MagicMock(), "user")
+    client.get_user_data = AsyncMock(return_value=user)
+    client.get_user_conditions = AsyncMock(return_value=None)
+    assert await client.get_all_device_states() == {"SERIAL": device}
+
+    client.get_user_data = AsyncMock(side_effect=api.WhiskerApiError("bad"))
+    assert not await client.test_connection()
