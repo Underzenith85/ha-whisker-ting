@@ -13,6 +13,7 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.core import callback
+from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import WhiskerApiClient, WhiskerAuthError, WhiskerConnectionError
@@ -90,6 +91,8 @@ class WhiskerConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "invalid_auth"
             except WhiskerConnectionError:
                 errors["base"] = "cannot_connect"
+            except AbortFlow:
+                raise
             except Exception:
                 _LOGGER.exception("Unexpected exception during login")
                 errors["base"] = "unknown"

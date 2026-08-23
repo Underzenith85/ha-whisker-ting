@@ -720,6 +720,7 @@ dev = [
     { name = "mypy" },
     { name = "pycares" },
     { name = "pytest" },
+    { name = "pytest-cov" },
     { name = "pytest-homeassistant-custom-component" },
     { name = "ruff" },
 ]
@@ -732,6 +733,7 @@ dev = [
     { name = "mypy", specifier = "==2.3.0" },
     { name = "pycares", specifier = "==4.5.0" },
     { name = "pytest", specifier = "==8.3.4" },
+    { name = "pytest-cov", specifier = "==6.0.0" },
     { name = "pytest-homeassistant-custom-component", specifier = "==0.13.199" },
     { name = "ruff", specifier = "==0.16.4" },
 ]

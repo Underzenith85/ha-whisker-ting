@@ -32,8 +32,11 @@ jobs:
       - name: Install development dependencies
         run: uv sync --locked
 
-      - name: Run tests
+      - name: Run tests with coverage
         run: uv run --no-sync pytest
+
+      - name: Enforce per-module coverage
+        run: uv run --no-sync python scripts/check_coverage.py coverage.json
 
   lint:
     name: Lint

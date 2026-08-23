@@ -11,6 +11,7 @@ dev = [
     "mypy==2.3.0",
     "pycares==4.5.0",
     "pytest==8.3.4",
+    "pytest-cov==6.0.0",
     "pytest-homeassistant-custom-component==0.13.199",
     "ruff==0.16.4",
 ]
@@ -20,7 +21,7 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers --cov=custom_components/whisker_ting --cov-report=term-missing --cov-report=json:coverage.json --cov-fail-under=95"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
