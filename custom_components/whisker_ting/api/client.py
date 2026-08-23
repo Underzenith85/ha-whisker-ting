@@ -118,7 +118,9 @@ class WhiskerApiClient:
             if self._refresh_token:
                 try:
                     await self._refresh_access_token()
-                    return self._access_token
+                    if self._access_token is not None:
+                        return self._access_token
+                    raise WhiskerAuthError("Token refresh returned no access token")
                 except WhiskerAuthError:
                     # Refresh failed, try full auth
                     if self._password is None:
@@ -126,7 +128,9 @@ class WhiskerApiClient:
 
             # Full authentication
             await self._authenticate()
-            return self._access_token
+            if self._access_token is not None:
+                return self._access_token
+            raise WhiskerAuthError("Authentication returned no access token")
 
     async def _authenticate(self) -> None:
         """Perform full authentication."""
@@ -160,6 +164,8 @@ class WhiskerApiClient:
     async def _refresh_access_token(self) -> None:
         """Refresh the access token."""
         _LOGGER.debug("Refreshing access token")
+        if self._refresh_token is None:
+            raise WhiskerAuthError("No refresh token is available")
         try:
             result = await self._auth.refresh_tokens(self._refresh_token)
 

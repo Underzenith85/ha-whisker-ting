@@ -53,6 +53,18 @@ STRUCTURED_EVENT_KINDS: tuple[tuple[str, str], ...] = (
 )
 
 
+def _site_event_timestamp_value(kind: str) -> Callable[[Site], datetime | None]:
+    """Build a typed site event timestamp accessor."""
+    return lambda site: _event_timestamp(site.events, kind)
+
+
+def _device_event_timestamp_value(
+    kind: str,
+) -> Callable[[DeviceState], datetime | None]:
+    """Build a typed device event timestamp accessor."""
+    return lambda state: _event_timestamp(state.events, kind)
+
+
 @dataclass(frozen=True, kw_only=True)
 class WhiskerSensorEntityDescription(SensorEntityDescription):
     """Describes a Whisker Ting sensor entity."""
@@ -109,7 +121,7 @@ SITE_SENSOR_DESCRIPTIONS: tuple[WhiskerSiteSensorEntityDescription, ...] = (
             device_class=SensorDeviceClass.TIMESTAMP,
             entity_category=EntityCategory.DIAGNOSTIC,
             entity_registry_enabled_default=False,
-            value_fn=lambda site, kind=kind: _event_timestamp(site.events, kind),
+            value_fn=_site_event_timestamp_value(kind),
         )
         for key, kind in STRUCTURED_EVENT_KINDS
     ),
@@ -429,7 +441,7 @@ SENSOR_DESCRIPTIONS: tuple[WhiskerSensorEntityDescription, ...] = (
             device_class=SensorDeviceClass.TIMESTAMP,
             entity_category=EntityCategory.DIAGNOSTIC,
             entity_registry_enabled_default=False,
-            value_fn=lambda state, kind=kind: _event_timestamp(state.events, kind),
+            value_fn=_device_event_timestamp_value(kind),
         )
         for key, kind in STRUCTURED_EVENT_KINDS
     ),

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -43,7 +43,7 @@ PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.SENSOR]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
-async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     """Set up integration-wide services."""
     async_register_history_service(hass)
     return True

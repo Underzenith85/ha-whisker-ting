@@ -70,9 +70,9 @@ class WhiskerWebSocket:
         self._monotonic = monotonic
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._connected = False
-        self._ping_task: asyncio.Task | None = None
-        self._receive_task: asyncio.Task | None = None
-        self._stale_check_task: asyncio.Task | None = None
+        self._ping_task: asyncio.Task[None] | None = None
+        self._receive_task: asyncio.Task[None] | None = None
+        self._stale_check_task: asyncio.Task[None] | None = None
         self._message_id = 0
         self._pending_invocations: dict[str, asyncio.Future[Any]] = {}
         self._first_data_received = asyncio.Event()
@@ -89,7 +89,7 @@ class WhiskerWebSocket:
         """Return True if connected and subscribed to the device stream."""
         return self._connected and self._subscribed
 
-    def _encode_invocation(self, method: str, args: list) -> tuple[str, bytes]:
+    def _encode_invocation(self, method: str, args: list[Any]) -> tuple[str, bytes]:
         """Encode a SignalR invocation message."""
         self._message_id += 1
         invocation_id = str(self._message_id)

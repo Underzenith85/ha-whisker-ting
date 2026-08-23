@@ -9,6 +9,7 @@ import re
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import TypedDict
 
 import aiohttp
 
@@ -22,6 +23,13 @@ from .models import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class _StreamCredentials(TypedDict):
+    """Credentials retained for reconnecting a station stream."""
+
+    api_key: str
+    user_id: int
 
 
 class WhiskerWebSocketManager:
@@ -55,8 +63,8 @@ class WhiskerWebSocketManager:
         self._voltage_data: dict[str, VoltageData] = {}
         self._station_states: dict[str, StationState] = {}
         self._station_diagnostics: dict[str, StationDiagnostics] = {}
-        self._credentials: dict[str, dict] = {}  # Store credentials for reconnect
-        self._reconnect_tasks: dict[str, asyncio.Task] = {}
+        self._credentials: dict[str, _StreamCredentials] = {}
+        self._reconnect_tasks: dict[str, asyncio.Task[None]] = {}
         self._reconnect_attempts: dict[str, int] = {}
         self._shutting_down = False
 
