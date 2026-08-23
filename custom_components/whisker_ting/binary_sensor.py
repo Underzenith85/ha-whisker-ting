@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
@@ -16,9 +15,15 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .api import DeviceState, Site, TingEvent
+from .api import DeviceState, Site
 from .coordinator import WhiskerDataUpdateCoordinator
 from .entity import WhiskerEntity, WhiskerSiteEntity
+from .entity_semantics import (
+    device_event_condition as _device_event_condition,
+)
+from .entity_semantics import (
+    event_condition as _event_condition,
+)
 
 PARALLEL_UPDATES = 0  # Coordinator handles all updates
 
@@ -166,38 +171,6 @@ SITE_BINARY_SENSOR_DESCRIPTIONS: tuple[
     )
     for key, device_class, on, off in EVENT_CONDITION_DESCRIPTIONS
 )
-
-
-def _event_condition(
-    events: list[TingEvent], on_kinds: frozenset[str], off_kinds: frozenset[str]
-) -> bool | None:
-    """Return state from the newest valid explicit transition."""
-    matches: list[tuple[datetime, bool]] = []
-    for event in events:
-        if event.event_kind not in on_kinds | off_kinds:
-            continue
-        try:
-            timestamp = datetime.fromisoformat(
-                event.timestamp_utc.replace("Z", "+00:00")
-            )
-        except ValueError:
-            continue
-        matches.append((timestamp, event.event_kind in on_kinds))
-    if not matches:
-        return None
-    return max(matches, key=lambda item: item[0])[1]
-
-
-def _device_event_condition(
-    state: DeviceState,
-    key: str,
-    on_kinds: frozenset[str],
-    off_kinds: frozenset[str],
-) -> bool | None:
-    """Prefer an explicit REST connectivity value, then event transitions."""
-    if key == "device_online" and state.is_online is not None:
-        return state.is_online
-    return _event_condition(state.events, on_kinds, off_kinds)
 
 
 async def async_setup_entry(
