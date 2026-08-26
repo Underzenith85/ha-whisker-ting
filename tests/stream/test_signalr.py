@@ -250,7 +250,7 @@ def test_extract_categorical_power_quality_payloads() -> None:
     """Ting secondary-stream arrays are extracted from their hub invocation."""
     records = [
         {"Category": "frequency", "ObsTime": "2026-08-22T00:00:00Z", "Value": "60.01"},
-        {"Category": "thdAvg", "ObsTime": "2026-08-22T00:00:00Z", "Value": "2.4"},
+        {"Category": "thdAvg", "ObsTime": "2026-08-22T00:00:00Z", "Value": "0.024"},
     ]
     frame = signalr.encode_hub_message(
         [1, {}, None, "updateGraphMultiCategorical", [records]]

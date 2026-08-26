@@ -60,6 +60,9 @@ def test_power_quality_decoder_validates_categories_and_values() -> None:
     """Only finite readings from recognized categories are retained."""
     payloads = [
         {"Category": "frequency", "Value": "60.1", "ObsTime": "2026-08-22T00:00:00Z"},
+        {"Category": "thdMin", "Value": "0.01"},
+        {"Category": "thdAvg", "Value": "0.03"},
+        {"Category": "thdMax", "Value": "0.05"},
         {"Category": "FutureMetric", "Value": 1},
         {"Category": "thdAvg", "Value": float("nan")},
         {"Category": "thdMax", "Value": "bad"},
@@ -71,7 +74,10 @@ def test_power_quality_decoder_validates_categories_and_values() -> None:
     ):
         readings = decode_power_quality_data(b"frame")
     assert [(item.category, item.value) for item in readings] == [
-        (PowerQualityCategory.FREQUENCY, 60.1)
+        (PowerQualityCategory.FREQUENCY, 60.1),
+        (PowerQualityCategory.THD_MIN, 1.0),
+        (PowerQualityCategory.THD_AVERAGE, 3.0),
+        (PowerQualityCategory.THD_MAX, 5.0),
     ]
 
     with patch(

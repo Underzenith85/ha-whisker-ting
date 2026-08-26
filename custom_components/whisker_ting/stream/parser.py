@@ -17,6 +17,14 @@ from .signalr import (
 _LOGGER = logging.getLogger(__name__)
 
 SECONDARY_DATA_ELEMENTS = tuple(category.value for category in PowerQualityCategory)
+THD_CATEGORIES = frozenset(
+    {
+        PowerQualityCategory.THD_MIN,
+        PowerQualityCategory.THD_AVERAGE,
+        PowerQualityCategory.THD_MAX,
+    }
+)
+THD_RATIO_TO_PERCENT = 100.0
 
 
 def parse_timestamp(value: Any) -> datetime:
@@ -83,6 +91,8 @@ def decode_power_quality_data(data: bytes) -> list[PowerQualityData]:
             value = float(payload["Value"])
             if not math.isfinite(value):
                 raise ValueError("non-finite power-quality value")
+            if category in THD_CATEGORIES:
+                value *= THD_RATIO_TO_PERCENT
             readings.append(
                 PowerQualityData(
                     timestamp=parse_timestamp(payload.get("ObsTime")),
