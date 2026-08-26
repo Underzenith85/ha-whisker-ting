@@ -29,7 +29,7 @@ class VoltageData:
 
 @dataclass(frozen=True)
 class PowerQualityData:
-    """Represent one categorical power-quality reading."""
+    """Represent frequency in hertz or normalized THD in percentage points."""
 
     timestamp: datetime
     category: PowerQualityCategory

@@ -210,7 +210,7 @@ def test_power_quality_categorical_updates_are_modeled() -> None:
                     {
                         "Category": "thdAvg",
                         "ObsTime": "2026-08-22T00:00:00Z",
-                        "Value": "2.4",
+                        "Value": "0.024",
                     },
                 ]
             ],
