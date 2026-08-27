@@ -7,7 +7,7 @@ An unofficial Home Assistant integration for monitoring [Whisker Labs Ting](http
 > [!WARNING]
 > This is an independent community project. It is not created, maintained, affiliated with, authorized by, or endorsed by Whisker Labs, Inc. Ting and Whisker Labs are trademarks of their respective owner.
 
-The integration provides read-only access to Ting account, device, hazard, frozen-pipe, notification, current-condition, and real-time electrical data. Integration version 1.3.0 is aligned with the Ting 3.0.4 service behavior.
+The integration provides read-only access to Ting account, device, hazard, frozen-pipe, notification, current-condition, and real-time electrical data. Integration version 1.3.1 is aligned with the Ting 3.0.4 service behavior.
 
 > [!IMPORTANT]
 > This integration is not currently included in HACS's default repository list. Add
